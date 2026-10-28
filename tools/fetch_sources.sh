@@ -12,6 +12,8 @@ curl -fsSL -o nucc_taxonomy.csv "https://www.nucc.org/images/stories/CSV/nucc_ta
 # ICD-10-CM FY2027 (Oct 1 2026 - Sep 30 2027), CDC/NCHS - public domain
 curl -fsSL -o icd10cm.zip "https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/icd10cm-code-descriptions-2027.zip"
 mkdir -p icd10cm && unzip -o -q icd10cm.zip -d icd10cm
+curl -fsSL -o icd10cm-tabular.zip "https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/icd10cm-table-and-index-2027.zip"
+mkdir -p icd10cm-tabular && unzip -o -q icd10cm-tabular.zip -d icd10cm-tabular
 
 # HCPCS Level II, October 2026 quarterly file, CMS - public domain (D-codes are ADA CDT and are skipped)
 curl -fsSL -A "Mozilla/5.0" -o hcpcs.zip "https://www.cms.gov/files/zip/october-2026-alpha-numeric-hcpcs-file.zip"

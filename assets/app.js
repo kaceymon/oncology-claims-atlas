@@ -4,6 +4,7 @@
   // ---------- categories ----------
   const CATS = {
     study: { label: "Study scenarios", short: "Study", blurb: "Remit-line scenarios: who owes it, can you bill the patient, fix or appeal, next steps." },
+    conflict: { label: "Can't bill together (either/or)", short: "Either/or", blurb: "Same-line, same-day and same-diagnosis conflicts: JW/JZ, 26/TC, one initial infusion, Excludes1…" },
     response: { label: "Denial playbooks", short: "Playbook", blurb: "Step-by-step responses to the denials oncology teams see most." },
     template: { label: "Templates", short: "Template", blurb: "Fill-in letters and scripts: LMNs, appeals, prior auth, P2P prep." },
     carc: { label: "Denial reason codes (CARC)", short: "CARC", blurb: "Claim adjustment reason codes in plain language, with what to do." },
@@ -32,9 +33,18 @@
     icd10: ["Block", "Billable"],
     hcpcs: ["Series", "Medicare coverage"],
     cpt: ["Group"],
-    study: ["Topic"],
-    carc: ["Topic", "Status"],
-    rarc: ["Topic", "Status"],
+    study: ["Topic", "Billing"],
+    conflict: ["Level"],
+    carc: ["Topic", "Billing", "Status"],
+    rarc: ["Topic", "Billing", "Status"],
+  };
+
+  // primary vs secondary billing: X12 codes carry it from the build; these curated entries are tagged by hand
+  const BILLING = { Primary: "Primary claim", Secondary: "Secondary / COB claim", Either: "Primary or secondary" };
+  const BILLING_CURATED = {
+    "study:oa23": "Secondary", "study:secondary-no-eob": "Secondary", "study:crossover-dup": "Secondary", "study:coinsurance": "Secondary",
+    "study:cob": "Primary", "study:wrong-payer": "Primary", "claim:secondary": "Secondary", "claim:crossover": "Secondary",
+    "payer:medigap": "Secondary", "response:cob": "Primary", "template:cob-update": "Primary",
   };
 
   // ---------- normalise records ----------
@@ -46,7 +56,9 @@
       const g = k => r.x12.raw[r.x12.ix[k]];
       const x = r.x12;
       x.topics = g("topics"); x.element = g("element"); x.start = g("start"); x.stop = g("stop"); x.repl = g("replacement"); x.alert = g("alert");
+      x.modified = g("modified") || ""; x.billing = g("billing") || "Either";
       x.status = x.stop ? `Retired ${x.stop}${x.repl ? ` – use ${x.repl}` : ""}` : `Active since ${x.start.slice(-4)}`;
+      r.billing = x.billing;
       if (!r.curated) {
         const kind = r.cat === "carc" ? "Reason code" : "Remark code";
         r.title = x.element ? `${x.element} – missing, incomplete or invalid` : `${kind} ${r.code} · ${x.topics.join(", ")}`;
@@ -56,7 +68,7 @@
       } else {
         r.tags = [...new Set(r.tags.concat(x.topics))];
       }
-      r.facets = { Topic: x.topics[0], Status: x.stop ? "Retired" : "Active" };
+      r.facets = { Topic: x.topics[0], Status: x.stop ? "Retired" : "Active", Billing: BILLING[x.billing] };
     } else if (!r.curated) {
       const g = k => r.raw[r.ix[k]];
       r.facets = {};
@@ -87,15 +99,38 @@
       }
       r.tags = r.tags || [];
     }
+    if (!r.billing && BILLING_CURATED[`${r.cat}:${r.code}`]) r.billing = BILLING_CURATED[`${r.cat}:${r.code}`];
+    if (r.billing) {
+      if (r.billing !== "Either") r.tags = [...new Set(r.tags.concat([BILLING[r.billing]]))];
+      r.hayExtra = r.billing === "Secondary" ? "secondary claim cob" : r.billing === "Primary" ? "primary claim" : "primary secondary";
+    }
     if (r.cat === "cpt") r.facets = { Group: r.cptGroup };
-    if (r.cat === "study") r.facets = { Topic: r.study.topic };
+    if (r.cat === "conflict") r.facets = { Level: r.level };
+    if (r.cat === "study") r.facets = Object.assign({ Topic: r.study.topic }, r.billing ? { Billing: BILLING[r.billing] } : {});
     r.id = `${r.cat}:${r.code}`;
     r.codeNorm = String(r.code).toLowerCase().replace(/[.\s-]/g, "");
     const plain = (r.body || "").replace(/<[^>]+>/g, " ");
-    r.hay = [r.code, r.codeNorm, r.title, r.summary, r.tags.join(" "), plain, r.template || ""].join(" ").toLowerCase();
+    r.hay = [r.code, r.codeNorm, r.title, r.summary, r.tags.join(" "), plain, r.template || "", r.hayExtra || ""].join(" ").toLowerCase();
     r.titleL = String(r.title).toLowerCase();
     byId.set(r.id, r);
   }
+  // either/or pairs from the conflict rules, indexed both ways
+  const PAIR_TEXT = { never: "Can't be billed together", modifier: "Together only with a modifier + documentation", oneof: "Pick one – not both", requires: "Needs this code on the same claim" };
+  const pairsByCode = new Map();
+  for (const r of R) if (r.cat === "conflict") for (const [a, b, type] of r.pairs) {
+    for (const [x, y] of [[a, b], [b, a]]) {
+      if (!pairsByCode.has(x)) pairsByCode.set(x, []);
+      pairsByCode.get(x).push({ other: y, type: type === "requires" && x === b ? "required-by" : type, rule: r });
+    }
+  }
+  // ICD codes match pair keys by category prefix (C50 covers C50.911)
+  const pairsFor = code => {
+    const out = [];
+    for (const [k, list] of pairsByCode) if (k === code || (/^[A-Z]\d/.test(code) && code.startsWith(k) && /^[A-Z]\d\d/.test(k))) out.push(...list);
+    return out;
+  };
+  const icdExcl = OCA.icdExcludes || { notes: [], codes: {} };
+
   // backlinks
   const back = new Map();
   for (const r of R) for (const t of r.rel || []) {
@@ -250,6 +285,7 @@
 
   function search(query, opts) {
     const { terms, notes, phrase, ctx, topicWords } = parseQuery(query);
+    notes.unshift(...pairCheck(query));
     const info = { notes, partial: false, didYouMean: null, terms };
     const exact = terms.map(() => []);
     const totalW = terms.reduce((s, t) => s + t.w, 0);
@@ -288,8 +324,10 @@
       if (extra.length) { info.partial = strict.length === 0; out = strict.concat(extra); }
     }
     // explain bare numbers: which code lists they hit, and whether that fits what the user described
+    const pairToks = pairCheck.hitTokens || new Set();
     terms.forEach((t, i) => {
-      if (!/^\d{1,4}$/.test(t.label)) return;
+      // skip when the number is clearly part of a code-pair question (26 TC, 96413 96360)
+      if (!/^\d{1,4}$/.test(t.label) || (pairToks.size > 1 && pairToks.has(t.label.toUpperCase()))) return;
       const hits = exact[i].filter(r => r.cat === "carc" || r.cat === "rarc");
       if (!hits.length && !exact[i].length) {
         notes.push(`No standard code list has <b>${esc(t.label)}</b>. If it's printed on an EOB or portal, it's most likely the payer's own explanation code – check that payer's code legend. <a href="${itemHref(byId.get("hipaa:remark-codes") || { cat: "hipaa", code: "remark-codes" })}">Standard vs payer codes</a>`);
@@ -330,6 +368,7 @@
         <div class="tile-blurb">${esc(CATS[c].blurb)}</div>
       </a>`).join("");
     const quick = [
+      ["conflict:jw-jz", "JW vs JZ (same line)"], ["conflict:26-tc", "26 vs TC"], ["conflict:one-initial", "One initial infusion per visit"],
       ["study:co16-dob", "CO-16: missing date of birth"], ["study:jz-missing", "Missing modifier (JW/JZ)"], ["term:group-codes", "CO vs PR – who owes it?"],
       ["hipaa:overview", "HIPAA standards"], ["payer:anthem", "Anthem BCBS"],
       ["topic:claim-lifecycle", "The claim lifecycle"], ["response:medical-necessity", "Medical necessity denial"],
@@ -392,7 +431,7 @@
 
     const rows = results.slice(0, limit).map(r => `
       <a class="row" href="${itemHref(r)}">
-        <div class="row-head">${badge(r.cat)}${codeTag(r, "code")}<span class="row-title">${esc(r.title)}</span></div>
+        <div class="row-head">${badge(r.cat)}${codeTag(r, "code")}<span class="row-title">${esc(r.title)}</span>${billPill(r)}</div>
         ${r.summary && r.summary !== r.title ? `<div class="row-sum">${esc(clip(r.summary, 220))}</div>` : ""}
       </a>`).join("");
 
@@ -418,7 +457,7 @@
             ${cat ? `<span class="muted small">${esc(CATS[cat].blurb)}</span>` : ""}
           </div>
           ${all.info.notes.map(n => `<div class="note">${n}</div>`).join("")}
-          ${all.info.partial ? `<div class="note subtle">No entry matched every word, so these match most of your phrase.</div>` : ""}
+          ${all.info.partial && !(pairCheck.hitTokens?.size > 1) ? `<div class="note subtle">No entry matched every word, so these match most of your phrase.</div>` : ""}
           ${all.info.didYouMean ? `<div class="note">Did you mean <a href="${qWith({ q: all.info.didYouMean })}"><b>${esc(all.info.didYouMean)}</b></a>?</div>` : ""}
           <div class="list">${rows || `<p class="empty">No matches. Try fewer words, a code without dots (c50911), or turn off “Oncology-relevant only”.</p>`}</div>
           ${results.length > limit ? `<a class="btn more" href="${(() => { const n = Object.assign({}, q, { n: limit + 200 }); return href("search", n); })()}">Show more (${nf.format(results.length - limit)} remaining)</a>` : ""}
@@ -451,6 +490,81 @@
     return `<div class="panel"><h3>Related</h3><div class="rel">${ids.map(id => { const x = byId.get(id); return `<a class="rel-item" href="${itemHref(x)}">${badge(x.cat)}${codeTag(x)}<span>${esc(clip(x.title, 70))}</span></a>`; }).join("")}</div></div>`;
   }
 
+  // "Can't bill together" panel for a code page: either/or rules + ICD-10 Excludes1
+  function codeLink(c) {
+    const hit = ["cpt", "hcpcs", "modifier", "icd10"].map(cat => byId.get(`${cat}:${c}`)).find(Boolean);
+    return hit ? `<a href="${itemHref(hit)}"><code>${esc(c)}</code></a> <span class="muted">${esc(clip(hit.title, 60))}</span>` : `<a href="${href("search", { q: c })}"><code>${esc(c)}</code></a>`;
+  }
+  function conflictPanel(r) {
+    const pairs = pairsFor(r.code);
+    const excl = r.cat === "icd10" ? (icdExcl.codes[r.code] || []).map(i => icdExcl.notes[i]) : [];
+    if (!pairs.length && !excl.length) return "";
+    let h = `<div class="conflicts"><h3>Can't bill together</h3>`;
+    if (pairs.length) {
+      const byRule = new Map();
+      for (const p of pairs) { if (!byRule.has(p.rule)) byRule.set(p.rule, []); byRule.get(p.rule).push(p); }
+      for (const [rule, ps] of byRule) {
+        h += `<div class="conflict"><div class="conflict-head"><span class="pill lvl">${esc(rule.level)}</span><a href="${itemHref(rule)}">${esc(rule.title)}</a></div><ul>${ps.map(p =>
+          `<li><span class="ptype t-${p.type}">${esc(p.type === "required-by" ? "Add-on that needs this code" : PAIR_TEXT[p.type])}</span> ${codeLink(p.other)}</li>`).join("")}</ul></div>`;
+      }
+    }
+    if (excl.length) {
+      h += `<div class="conflict"><div class="conflict-head"><span class="pill lvl">Same diagnosis list</span><a href="${itemHref(byId.get("conflict:excludes1") || r)}">Excludes1 – not coded with ${esc(r.code)}</a></div><ul>${excl.map(([text, refs]) =>
+        `<li>${esc(text.replace(/\s*\([^)]*\)\s*$/, ""))} ${refs.map(c => codeLink(c.replace(/-$/, ""))).join(", ")}</li>`).join("")}</ul>
+        <p class="muted small">ICD-10-CM FY2027 tabular, including notes inherited from the parent category. If the two conditions are truly unrelated, the guidelines allow both.</p></div>`;
+    }
+    return h + `<p class="muted small">Rules summarise CPT conventions, CMS NCCI policy and ICD-10-CM notes. For any other code pair, check the <a href="https://www.cms.gov/medicare/coding-billing/national-correct-coding-initiative-ncci-edits" target="_blank" rel="noopener">NCCI edits ↗</a>.</p></div>`;
+  }
+  // two or more codes in one search: report any either/or rule between them
+  function pairCheck(query) {
+    const toks = [...new Set(query.toUpperCase().split(/[^A-Z0-9.]+/).filter(t => t && (pairsByCode.has(t) || byId.has(`icd10:${t}`) || byId.has(`cpt:${t}`) || byId.has(`hcpcs:${t}`) || (t.length === 2 && byId.has(`modifier:${t}`)))))];
+    pairCheck.hitTokens = new Set();
+    if (toks.length < 2) return [];
+    const notes = [];
+    pairCheck.hitTokens = new Set(toks);
+    for (let i = 0; i < toks.length; i++) for (let j = i + 1; j < toks.length; j++) {
+      const a = toks[i], b = toks[j];
+      const seenRules = new Set();
+      for (const hit of pairsFor(a).filter(p => p.other === b || (/^[A-Z]\d/.test(b) && b.startsWith(p.other)))) {
+        if (seenRules.has(hit.rule)) continue;
+        seenRules.add(hit.rule);
+        notes.push(`<b>${esc(a)} + ${esc(b)}</b>: ${esc(hit.type === "required-by" ? `${b} is an add-on that needs ${a}` : PAIR_TEXT[hit.type])} <span class="pill lvl">${esc(hit.rule.level)}</span> – <a href="${itemHref(hit.rule)}">${esc(hit.rule.title)}</a>`);
+      }
+      // active cancer + personal history of cancer: either/or when it's the same site
+      const [c, z] = /^Z85/.test(a) ? [b, a] : /^Z85/.test(b) ? [a, b] : [];
+      if (c && /^C\d/.test(c) && byId.get("conflict:history-vs-active"))
+        notes.push(`<b>${esc(c)} + ${esc(z)}</b>: Either/or <i>if they're the same site</i> – a cancer still being treated takes the C-code; Z85 is only for a cancer that's gone and no longer treated. <span class="pill lvl">Same diagnosis list</span> – <a href="${itemHref(byId.get("conflict:history-vs-active"))}">Active cancer or personal history</a>`);
+      for (const [x, y] of [[a, b], [b, a]]) {
+        const ex = (icdExcl.codes[x] || []).map(k => icdExcl.notes[k]).find(([, refs]) => refs.some(rf => y.startsWith(rf.replace(/-$/, ""))));
+        if (ex) notes.push(`<b>${esc(x)} + ${esc(y)}</b>: Excludes1 – can't be coded together (${esc(ex[0])}) <span class="pill lvl">Same diagnosis list</span>`);
+      }
+    }
+    if (!notes.length) notes.push(`No either/or rule on file for ${toks.map(esc).join(" + ")}. That doesn't guarantee they're payable together – check the <a href="https://www.cms.gov/medicare/coding-billing/national-correct-coding-initiative-ncci-edits" target="_blank" rel="noopener">NCCI edits ↗</a>.`);
+    return notes;
+  }
+
+  function billPill(r, always) {
+    if (!r.billing || (r.billing === "Either" && !always)) return "";
+    return `<span class="pill bill-${r.billing.toLowerCase()}" title="Where this shows up in billing">${esc(BILLING[r.billing])}</span>`;
+  }
+  // deep link that scrolls X12's list to this code (text fragment: code, then the first words of its row)
+  function x12Url(r) {
+    const base = OCA.sources[r.cat]?.url || "https://x12.org/codes";
+    const anchor = r.x12?.raw[r.x12.ix.anchor];
+    const enc = s => encodeURIComponent(s).replace(/-/g, "%2D").replace(/,/g, "%2C");
+    return anchor ? `${base}#:~:text=${enc(r.code)}-,${enc(anchor)}` : `${base}#:~:text=${enc(r.code)}`;
+  }
+  function verifyBox(r) {
+    const x = r.x12, src = OCA.sources[r.cat] || {};
+    const d = (label, v) => v ? `<div><span>${label}</span><b>${esc(v)}</b></div>` : "";
+    return `<div class="verify">
+      <div class="verify-head"><b>Check the official wording</b><span class="muted small">X12 owns the exact text, so it isn't copied here – open it side by side to validate.</span></div>
+      <div class="vdates">${d("Code", r.code)}${d("Start", x.start)}${d("Last modified", x.modified)}${d("Stopped", x.stop)}${d("Billing", BILLING[x.billing])}</div>
+      <div class="verify-actions"><a class="btn primary small" href="${esc(x12Url(r))}" target="_blank" rel="noopener" data-copy-also="${esc(r.code)}">Verify ${esc(r.code)} on X12 ↗</a></div>
+      <p class="muted small">Opens X12's list scrolled to ${esc(r.code)} (Chrome, Edge, Safari and recent Firefox) and copies the code so you can Ctrl+F if your browser doesn't jump. Dates and status checked against the X12 list on ${esc(src.checked || "")}.</p>
+    </div>`;
+  }
+
   // topic -> [what to do, related ids] for X12 codes that have no hand-written page
   const TOPIC_HELP = {
     "Diagnosis": ["Diagnosis problems: check the code is valid for the date of service, coded to full specificity, pointed to the right line, and on the payer's covered-diagnosis list for that service. Coding errors → corrected claim; coverage disputes → appeal.", ["carc:11", "carc:167", "carc:146", "rarc:M76", "rarc:MA63", "study:dx-specificity", "response:medical-necessity"]],
@@ -477,15 +591,18 @@
     if (!r) { app.innerHTML = `<p class="empty">Not found. <a href="#/">Go home</a></p>`; return; }
     document.title = `${isRealCode(r.code) ? r.code + " – " : ""}${r.title} – Claims Atlas`;
     let main = "";
-    const x12Link = `<a href="${esc(OCA.sources[r.cat]?.url || "https://x12.org/codes")}" target="_blank" rel="noopener">official X12 wording ↗</a>`;
+    const x12Link = `<a href="${esc(r.x12 ? x12Url(r) : OCA.sources[r.cat]?.url || "https://x12.org/codes")}" target="_blank" rel="noopener" data-copy-also="${esc(r.code)}">official X12 wording ↗</a>`;
     if (r.curated && r.x12) {
       const x = r.x12;
-      main += `<p class="statusline"><span class="pill ${x.stop ? "retired" : "active"}">${esc(x.status)}</span> ${x.topics.map(t => `<a class="tag" href="${href("search", { cat: r.cat, "f.Topic": t })}">${esc(t)}</a>`).join(" ")} · ${x12Link}</p>`;
+      main += `<p class="statusline"><span class="pill ${x.stop ? "retired" : "active"}">${esc(x.status)}</span>${billPill(r, true)} ${x.topics.map(t => `<a class="tag" href="${href("search", { cat: r.cat, "f.Topic": t })}">${esc(t)}</a>`).join(" ")}</p>`;
+    } else if (r.billing) {
+      main += `<p class="statusline">${billPill(r, true)}</p>`;
     }
     if (r.curated) {
       main += r.summary && r.summary !== r.title ? `<p class="lede">${esc(r.summary)}</p>` : "";
       main += r.body || "";
       if (r.template) main += templateTool(r);
+      if (r.x12) main += verifyBox(r);
     } else if (r.cat === "provider") {
       const g = k => r.raw[r.ix[k]];
       main += `<dl class="kv"><dt>Taxonomy code</dt><dd><code>${esc(r.code)}</code> ${copyBtn(r.code)}</dd><dt>Grouping</dt><dd>${esc(g("grouping"))}</dd><dt>Classification</dt><dd>${esc(g("classification"))}</dd>${g("specialization") ? `<dt>Specialization</dt><dd>${esc(g("specialization"))}</dd>` : ""}<dt>Section</dt><dd>${esc(g("section"))}</dd></dl>`;
@@ -522,6 +639,7 @@
       const help = TOPIC_HELP[x.topics[0]];
       if (help) main += `<h4>Topic guide: ${esc(x.topics[0])}</h4><p>${help[0]}</p><div class="rel">${help[1].map(id => byId.get(id)).filter(Boolean).map(h => `<a class="rel-item" href="${itemHref(h)}">${badge(h.cat)}${codeTag(h)}<span>${esc(h.title)}</span></a>`).join("")}</div>`;
       if (x.stop) main += `<p class="warn">Retired codes can still show up on old remits or from payers that haven't updated. On new claims the payer should be using the replacement.</p>`;
+      main += verifyBox(r);
     } else {
       main += `<dl class="kv"><dt>Code</dt><dd><code>${esc(r.code)}</code> ${copyBtn(r.code)}</dd></dl><p>${esc(r.text || r.title)}</p>`;
     }
@@ -532,7 +650,7 @@
           ${r.tags?.length ? `<div class="tags">${r.tags.filter(Boolean).map(t => `<a class="tag" href="${href("search", { q: t })}">${esc(t)}</a>`).join("")}</div>` : ""}
         </header>
         <div class="item-grid">
-          <div class="item-main">${main}</div>
+          <div class="item-main">${main}${conflictPanel(r)}</div>
           <aside class="item-side">${srcList(r)}${relList(r)}
             <div class="panel"><h3>Share</h3><button class="btn small" data-copy="${esc(location.href)}">Copy link</button></div>
           </aside>
@@ -771,13 +889,14 @@
         <p>A searchable reference for people learning US health insurance claims, with an oncology focus: who bills (provider types and care settings), what they bill on (claim forms and transactions), what they bill (diagnosis, HCPCS and modifier codes), what comes back (denial reason and remark codes) and what to do next (playbooks, appeal pathways and templates).</p>
         <h2>Only public information</h2>
         <p>Everything here is either a public-domain US government code set, a freely licensed code set, or our own plain-language explanation that links to the official source.</p>
-        <ul>${gen}</ul>
+        <ul>${gen}<li><b>ICD-10-CM Excludes1 notes</b> (FY2027 tabular, public domain) – shown on every oncology diagnosis page.</li></ul>
         <p><b>Hand-written content</b>: claim types, care settings, payers, bill types, revenue codes, denial explanations, playbooks, appeal pathways, topics, glossary and templates – summarised from public CMS, HHS, DOL and statutory sources linked on each page.</p>
         <h2>What is deliberately not copied</h2>
         <ul>
           <li><b>CPT®</b> code descriptors (© American Medical Association) – code ranges are named, descriptors are not reproduced.</li>
           <li><b>CDT</b> dental codes (© American Dental Association) – D-codes are excluded from the HCPCS list.</li>
-          <li><b>CARC/RARC</b> official text (© X12) – we paraphrase and link to x12.org.</li>
+          <li><b>CARC/RARC</b> official text (© X12) – every code is indexed with its status and dates, plus a three-word locator so "Verify on X12" can open X12's own list at that code; explanations are our paraphrases.</li>
+          <li><b>NCCI</b> pair files (CMS distributes them under an AMA CPT license) – the either/or rules here are written from CPT conventions and NCCI policy; check NCCI for any other pair.</li>
           <li><b>NUBC</b> UB-04 code values (type of bill, revenue, condition codes) – paraphrased from CMS manuals and linked.</li>
           <li><b>NCCN</b> guidelines and commercial compendia – cited by name only.</li>
           <li>No patient data. Template text you type stays in your browser's local storage.</li>
@@ -797,6 +916,8 @@
     function fallback() { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); done(); } catch { /* ignore */ } ta.remove(); }
   }
   document.addEventListener("click", e => { const b = e.target.closest("[data-copy]"); if (b) { e.preventDefault(); copyText(b.dataset.copy, b); } });
+  // links that also copy a code (e.g. Verify on X12) – copy quietly, let the link open
+  document.addEventListener("click", e => { const a = e.target.closest("[data-copy-also]"); if (a) try { navigator.clipboard?.writeText(a.dataset.copyAlso); } catch { /* clipboard unavailable */ } });
 
   // ---------- router ----------
   function route() {

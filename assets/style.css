@@ -275,6 +275,31 @@ kbd { font: 600 .72rem var(--mono); padding: 1px 6px; border-radius: 5px; border
 .pill.active { color: var(--c-setting); background: color-mix(in srgb, var(--c-setting) 14%, transparent); }
 .pill.retired { color: var(--c-carc); background: color-mix(in srgb, var(--c-carc) 14%, transparent); }
 
+.pill.bill-primary { color: var(--c-claim); background: color-mix(in srgb, var(--c-claim) 14%, transparent); }
+.pill.bill-secondary { color: var(--c-payer); background: color-mix(in srgb, var(--c-payer) 16%, transparent); }
+.pill.bill-either { color: var(--ink-2); background: var(--surface-2); }
+.row-head .pill { margin-left: auto; }
+.verify { margin-top: 22px; padding: 14px 16px; border-radius: 14px; border: 1px dashed var(--line-strong); background: var(--surface-2); }
+.verify-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.vdates { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 12px; }
+.vdates span { display: block; font-size: .68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.vdates b { font-family: var(--mono); font-size: .86rem; }
+.verify-actions { margin-bottom: 6px; }
+
+/* either/or conflicts */
+.conflicts { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.conflicts h3 { font-size: 1.05rem; margin-bottom: 10px; }
+.conflict { background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin-bottom: 10px; }
+.conflict-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-weight: 650; margin-bottom: 4px; }
+.conflict ul { margin: 4px 0 2px; padding-left: 1.1em; }
+.conflict li { margin-bottom: 4px; font-size: .9rem; }
+.pill.lvl { color: var(--c-topic); background: color-mix(in srgb, var(--c-topic) 14%, transparent); }
+.ptype { display: inline-block; font-size: .72rem; font-weight: 700; padding: 1px 7px; border-radius: 6px; margin-right: 4px; }
+.t-never { color: var(--c-response); background: color-mix(in srgb, var(--c-response) 14%, transparent); }
+.t-modifier { color: var(--c-rarc); background: color-mix(in srgb, var(--c-rarc) 14%, transparent); }
+.t-oneof, .t-requires, .t-required-by { color: var(--c-claim); background: color-mix(in srgb, var(--c-claim) 14%, transparent); }
+.level-line { margin-bottom: 6px; }
+
 /* quiz */
 .mcq { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px 14px; margin: 0 0 12px; min-width: 0; }
 .mcq legend { display: flex; align-items: center; gap: 8px; font-weight: 700; padding: 0 6px; }
