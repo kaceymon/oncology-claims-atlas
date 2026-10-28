@@ -6,7 +6,7 @@
     study: { label: "Study scenarios", short: "Study", blurb: "Remit-line scenarios: who owes it, can you bill the patient, fix or appeal, next steps." },
     conflict: { label: "Can't bill together (either/or)", short: "Either/or", blurb: "Same-line, same-day and same-diagnosis conflicts: JW/JZ, 26/TC, one initial infusion, Excludes1…" },
     response: { label: "Denial playbooks", short: "Playbook", blurb: "Step-by-step responses to the denials oncology teams see most." },
-    template: { label: "Templates", short: "Template", blurb: "Fill-in letters and scripts: LMNs, appeals, prior auth, P2P prep." },
+    template: { label: "Templates", short: "Template", blurb: "letter and script templates: LMNs, appeals, prior auth, P2P prep." },
     carc: { label: "Denial reason codes (CARC)", short: "CARC", blurb: "Claim adjustment reason codes in plain language, with what to do." },
     rarc: { label: "Remark codes (RARC)", short: "RARC", blurb: "Remittance remark codes that explain the CARC." },
     appeal: { label: "Appeal pathways", short: "Appeal", blurb: "Medicare, Medicare Advantage, Part D, Medicaid and commercial levels and deadlines." },
@@ -380,7 +380,7 @@
       <section class="hero">
         <span class="eyebrow">US health insurance claims · oncology deep-dive</span>
         <h1>Every claim type, provider type, code and denial – <span class="grad-text">searchable.</span></h1>
-        <p class="lede">${nf.format(R.length)} entries built from public federal code sets, with plain-language denial playbooks, appeal pathways and fill-in templates.</p>
+        <p class="lede">${nf.format(R.length)} entries built from public federal code sets, with plain-language denial playbooks, appeal pathways and letter templates.</p>
         <form class="bigsearch" id="homeSearch" role="search">
           <input id="homeQ" type="search" placeholder="Ask anything: “what does CO 16 mean”, “Keytruda”, “missing modifier”, “00857”…" aria-label="Search" autocomplete="off">
           <button class="btn primary">Search</button>
@@ -662,99 +662,33 @@
 
   function copyBtn(text) { return `<button class="btn ghost small" data-copy="${esc(text)}" title="Copy">Copy</button>`; }
 
-  // ---------- template filler ----------
+  // ---------- templates (read-only: no input boxes, nothing typed or stored) ----------
   // older versions saved template drafts in the browser – remove them
   try { Object.keys(localStorage).filter(k => k.startsWith("oca-tpl-")).forEach(k => localStorage.removeItem(k)); } catch { /* storage unavailable */ }
-  function fieldsOf(t) { return [...new Set([...t.matchAll(/\{\{([^}]+)\}\}/g)].map(m => m[1]))]; }
-  // Allow-list: only fields about the practice, payer, physician, drug/code, policy and published
-  // evidence get an input box. Everything else - the patient, their claim and their case, including the
-  // clinical argument - stays a [blank] to write by hand outside the site, so there is nowhere to type it.
-  const SAFE_FIELDS = [
-    /^practice |^practice or facility name$|^facility name$|^servicing facility name$|^billing contact name$|^date$|^date and time$|^due date$|^owner$/i,
-    /^payer (name|department|address|phone|preferred site)|^member services phone$|^rep name$|^mac name$|^mac appeals address/i,
-    /^physician (name|npi|direct phone)|^specialty$|^contact for questions|^(billing|facility) npi$|^tax id$|^pos code$|^npi$|^out-of-network provider/i,
-    /^drug( name| \/ regimen| \/ procedure| \/ service and codes| \/ regimen or service)?$|^requested drug$|^preferred drug|^hcpcs|^code\(s\)$|^codes and description|^service \/ trial/i,
-    /^policy name|guideline|^nccn|^e\.g\. nccn|^compendium name$|^listing \/ recommendation|^fda|^key trial|^citations$|^phase iii|^adoption at|^ncd \/ lcd|^quote the plan|^trial title$|^nct number$|^phase$|^sponsor$/i,
-    /^standard \/ expedited$|^urgency \(|^pre-service \(|^filing limit|^state insurance department|^state step therapy|^site of care \(|^enclosures|^other enclosures$/i,
-    /^for medicare: |^for state-regulated|^commercial non-grandfathered|^medicare: ncd|^medicaid: social security|^if expedited|^if applicable|^provided by the sponsor/i,
-  ];
-  const PATIENT_ID = { test: f => !SAFE_FIELDS.some(rx => rx.test(f.trim())) };
-  // typed text that looks like patient identifiers is refused even in an allowed field
-  const LOOKS_PERSONAL = [
-    [/\b\d{3}-\d{2}-\d{4}\b/, "a Social Security number"],
-    [/\b[1-9][AC-HJKMNP-RT-Y][AC-HJKMNP-RT-Y0-9]\d[AC-HJKMNP-RT-Y][AC-HJKMNP-RT-Y0-9]\d[AC-HJKMNP-RT-Y]{2}\d{2}\b/i, "a Medicare number (MBI)"],
-    [/\b(0?[1-9]|1[0-2])[\/-](0?[1-9]|[12]\d|3[01])[\/-](19|20)?\d\d\b/, "a date (dates of birth and service aren't allowed)"],
-  ];
-  const DATE_FIELDS = /^(date|date and time|due date)$/i;
+  const templateText = r => r.template.replace(/\{\{([^}]+)\}\}/g, (_, f) => `[${f}]`);
   function templateTool(r) {
-    const fields = fieldsOf(r.template);
+    const html = esc(r.template).replace(/\{\{([^}]+)\}\}/g, (_, f) => `<mark class="blank">[${f}]</mark>`);
     return `
-      <div class="tpl" id="tpl" data-tab="fill">
-        <div class="tpl-tabs" role="tablist"><button type="button" role="tab" data-tab="fill">Fill in <span id="tplCount"></span></button><button type="button" role="tab" data-tab="preview">Preview letter</button></div>
-        <div class="tpl-head"><h3>Fill in the template</h3>
-          <div class="tpl-actions"><button class="btn primary small" id="tplCopy">Copy letter</button><button class="btn small" id="tplDownload">Download .txt</button><button class="btn small" id="tplPrint">Print</button><button class="btn ghost small" id="tplClear">Clear fields</button></div></div>
-        <div class="tpl-legend">
-          <span><mark class="filled">highlighted</mark> = fill in here: practice, payer, physician, drug and codes, policy and published evidence</span>
-          <span><mark class="locked">[dashed]</mark> = anything about the patient or their case – write it by hand after you print or paste. This site has nowhere to type patient information.</span>
-        </div>
-        <p class="tpl-warn" id="tplWarn" role="alert" hidden></p>
-        <div class="tpl-grid">
-          <form class="tpl-form" id="tplForm">${fields.map((f, i) => {
-            if (PATIENT_ID.test(f)) return "";
-            // judge the field by its name, not the example text in brackets after it
-            const name = f.replace(/\s*\(.*\)\s*$/, "");
-            const long = name.length > 48 || /enclosures|citation|guideline|trial|quote|^for |^if |^commercial|^medica/i.test(name);
-            return `<label><span>${esc(f)}</span>${long ? `<textarea data-f="${i}" rows="2" autocomplete="off"></textarea>` : `<input data-f="${i}" type="text" autocomplete="off">`}</label>`;
-          }).join("")}</form>
-          <pre class="tpl-preview" id="tplPreview" aria-live="polite"></pre>
-        </div>
-        <p class="muted small">Nothing you type is saved or sent anywhere – it disappears when you leave the page. Copy, download or print before you go.</p>
+      <div class="tpl">
+        <div class="tpl-head"><h3>Template</h3>
+          <div class="tpl-actions"><button class="btn primary small" id="tplCopy">Copy template</button><button class="btn small" id="tplDownload">Download .txt</button><button class="btn small" id="tplPrint">Print</button></div></div>
+        <p class="muted small">Copy it into your own document and replace each <mark class="blank">[bracketed blank]</mark> there. This site has no fields to type into.</p>
+        <pre class="tpl-preview">${html}</pre>
       </div>`;
   }
   function wireTemplate(r) {
-    const fields = fieldsOf(r.template);
-    const inputs = [...document.querySelectorAll("#tplForm [data-f]")];
-    // refuse anything that looks like a patient identifier
-    $("#tplForm").addEventListener("input", e => {
-      const el = e.target, field = fields[+el.dataset.f] || "";
-      const hit = LOOKS_PERSONAL.find(([rx], k) => !(k === 2 && DATE_FIELDS.test(field)) && rx.test(el.value));
-      const warn = $("#tplWarn");
-      if (hit) {
-        el.value = el.value.replace(hit[0], "");
-        warn.textContent = `Removed what looked like ${hit[1]}. Patient information can't be entered here – add it by hand after printing.`;
-        warn.hidden = false;
-      } else warn.hidden = true;
-    }, true);
-    const render = () => {
-      const vals = {};
-      inputs.forEach(el => { vals[fields[+el.dataset.f]] = el.value; });
-      $("#tplCount").textContent = `${inputs.filter(el => el.value.trim()).length}/${inputs.length}`;
-      const pre = $("#tplPreview");
-      pre.innerHTML = esc(r.template).replace(/\{\{([^}]+)\}\}/g, (_, f) => {
-        const name = f.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-        if (PATIENT_ID.test(name)) return `<mark class="locked" title="Fill in by hand">[${f}]</mark>`;
-        const v = vals[name];
-        return v ? `<mark class="filled">${esc(v)}</mark>` : `<mark class="blank">[${f}]</mark>`;
-      });
-      return r.template.replace(/\{\{([^}]+)\}\}/g, (_, f) => vals[f] || `[${f}]`);
-    };
-    let text = render();
-    $("#tplForm").oninput = () => { text = render(); };
-    document.querySelectorAll(".tpl-tabs [data-tab]").forEach(b => b.onclick = () => { $("#tpl").dataset.tab = b.dataset.tab; $("#tpl").scrollIntoView({ block: "start", behavior: "smooth" }); });
-    $("#tplCopy").onclick = () => copyText(render(), $("#tplCopy"));
+    $("#tplCopy").onclick = () => copyText(templateText(r), $("#tplCopy"));
     $("#tplDownload").onclick = () => {
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([render()], { type: "text/plain" }));
+      a.href = URL.createObjectURL(new Blob([templateText(r)], { type: "text/plain" }));
       a.download = r.code + ".txt"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     };
     $("#tplPrint").onclick = () => {
       const w = window.open("", "_blank");
       if (!w) return;
-      w.document.write(`<!doctype html><title>${esc(r.title)}</title><pre style="white-space:pre-wrap;font:12pt/1.45 Georgia,serif;margin:1in">${esc(render())}</pre>`);
+      w.document.write(`<!doctype html><title>${esc(r.title)}</title><pre style="white-space:pre-wrap;font:12pt/1.45 Georgia,serif;margin:1in">${esc(templateText(r))}</pre>`);
       w.document.close(); w.focus(); w.print();
     };
-    $("#tplClear").onclick = () => { inputs.forEach(el => { el.value = ""; }); text = render(); };
-    void text;
   }
 
   // ---------- NPI lookup (public NPPES registry; opens in a new tab) ----------
@@ -931,7 +865,7 @@
           <li><b>NCCI</b> pair files (CMS distributes them under an AMA CPT license) – the either/or rules here are written from CPT conventions and NCCI policy; check NCCI for any other pair.</li>
           <li><b>NUBC</b> UB-04 code values (type of bill, revenue, condition codes) – paraphrased from CMS manuals and linked.</li>
           <li><b>NCCN</b> guidelines and commercial compendia – cited by name only.</li>
-          <li>No patient data. Templates never ask for patient identifiers, claim numbers, dates or clinical details, and nothing typed into a template is saved or sent anywhere.</li>
+          <li>No patient data. Templates are read-only text with [bracketed blanks] – there's nowhere on the site to type information in.</li>
         </ul>
         <h2>Versions</h2>
         <p>NUCC taxonomy v26.1 · ICD-10-CM FY2027 (Oct 1 2026 – Sep 30 2027) · HCPCS Level II October 2026 · CMS Place of Service code set. Rebuild with <code>tools/fetch_sources.sh</code> and <code>tools/build_data.py</code>.</p>

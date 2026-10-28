@@ -15,7 +15,7 @@ Plain HTML/CSS/JS, no build step, works on GitHub Pages (and by opening `index.h
 | Oncology CPT codes (plain-language labels) | 151 | Code numbers only; descriptors are © AMA and not reproduced |
 | Every X12 reason code (CARC) and remark code (RARC) | 408 + 1,216 | Code, status, topic and affected data element; ~120 have hand-written plain-language guides. Official wording © X12, linked |
 | Claim forms & types, bill types, revenue codes, payers, care settings, appeals, HIPAA, topics, glossary | ~240 | Hand-written summaries of public CMS/HHS/DOL sources |
-| Denial playbooks, fill-in templates, study quiz scenarios | 85 | Original content |
+| Denial playbooks, letter templates, study quiz scenarios | 85 | Original content |
 | Either/or rules (same line, same claim/day, same diagnosis list) | 24 | Written from CPT conventions, NCCI policy and ICD-10-CM guidelines |
 | ICD-10-CM Excludes1 notes for the oncology codes | 1,842 codes | CDC/NCHS – public domain |
 

@@ -1,4 +1,4 @@
-// Original fill-in templates. {{Field name}} placeholders become form inputs on the site.
+// Original letter/script templates. {{Field name}} placeholders are shown as [bracketed blanks] - read-only, no inputs.
 // Educational starting points only - adapt to the payer's instructions and the patient's record.
 
 const HEAD = `{{Practice or facility name}}
