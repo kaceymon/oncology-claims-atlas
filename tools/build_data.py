@@ -188,9 +188,68 @@ def build_pos():
         "cols": ["code", "title", "text"], "rows": rows})
 
 
+# ---------- X12 CARC / RARC index ----------
+# X12 owns the official wording, so we emit only facts derived from it: the code, its
+# active/retired dates, a replacement code if one is named, topic labels from keyword rules,
+# and - for the formulaic "Missing/incomplete/invalid <data element>" remarks - which data
+# element is affected. The site links to x12.org for the official text.
+X12_TOPICS = [
+    ("Diagnosis", r"diagnos|icd"), ("Authorization / referral", r"authoriz|precert|pre-cert|referral|notification"),
+    ("Modifier", r"modifier"), ("Drug / NDC", r"\bndc\b|national drug code|drug|pharmac|prescription"),
+    ("Coordination of benefits", r"prior payer|other payer|coordination of benefits|primary payer|secondary|crossover|other insur"),
+    ("Patient / member data", r"patient|insured|subscriber|member|beneficiar|enrollee"),
+    ("Eligibility / coverage dates", r"coverage|enroll|eligib|terminat"),
+    ("Provider / credentialing", r"provider|npi|taxonomy|credential|certif|licens|specialty|physician"),
+    ("Timely filing", r"time limit|timely"), ("Duplicate", r"duplicate"),
+    ("Medical necessity / benefit", r"medical necessity|medically necessary|non-covered|not covered|benefit|experimental|investigational|proven"),
+    ("Records / attachments", r"medical record|documentation|attachment|information requested|information was not"),
+    ("Bundling / NCCI", r"bundl|included in the|ncci|same day|same date|same session|component"),
+    ("Units / frequency", r"\bunits?\b|frequency|number of|quantity"),
+    ("Place of service / bill type", r"place of service|bill type|type of bill|facility type"),
+    ("Dates", r"\bdates?\b"), ("Procedure code", r"procedure code|hcpcs|cpt|revenue code"),
+    ("Payment / contractual", r"payment|fee schedule|deductible|coinsurance|co-?payment|sequestration|interest|refund|reversal|adjust|allowance|contract"),
+    ("Workers' comp / P&C", r"property|casualty|workers|liability|accident"),
+    ("Institutional data", r"admission|discharge|condition code|occurrence|value code|drg|revenue"),
+    ("Dental", r"dental|tooth|teeth"), ("DME / supplies", r"durable|dme|equipment|supplies|rental"), ("Lab", r"\blab|clia"),
+]
+
+def build_x12():
+    out = {}
+    for fn, cat in (("carc.html", "carc"), ("rarc.html", "rarc")):
+        path = os.path.join(SRC, fn)
+        if not os.path.exists(path):
+            print(f"skip {fn} (not downloaded)")
+            return
+        t = open(path, encoding="utf-8", errors="replace").read()
+        rows = []
+        for r in re.findall(r"<tr[^>]*>(.*?)</tr>", t, re.S):
+            c = [re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", x))).strip() for x in re.findall(r"<td[^>]*>(.*?)</td>", r, re.S)]
+            if len(c) < 2 or not re.fullmatch(r"[A-Z]{0,2}\d{1,4}", c[0]):
+                continue
+            text = c[1]
+            start = re.search(r"Start:\s*(\d\d/\d\d/\d{4})", text)
+            stop = re.search(r"Stop:\s*(\d\d/\d\d/\d{4})", text)
+            repl = re.search(r"(?:use|replaced by|see) (?:code |carc |rarc )?([A-Z]{0,2}\d{1,4})\b", text, re.I)
+            desc = re.split(r"\s(?:Start|Usage|Notes):", text)[0].strip()
+            topics = [name for name, rx in X12_TOPICS if re.search(rx, desc, re.I)][:3] or ["General"]
+            element = ""
+            m = re.match(r"(?:Alert: )?(?:Missing/incomplete/invalid|Missing|Incomplete/invalid)\s+(.+?)\.?$", desc, re.I)
+            if m and len(m.group(1)) < 90:
+                element = m.group(1)[0].upper() + m.group(1)[1:]
+            rows.append([c[0], element, topics, start.group(1) if start else "", stop.group(1) if stop else "",
+                         repl.group(1) if repl and repl.group(1) != c[0] else "", 1 if desc.lower().startswith("alert") else 0])
+        out[cat] = rows
+    for cat in ("carc", "rarc"):
+        emit("x12_" + cat, cat, {
+            "source": {"name": f"X12 {'Claim Adjustment Reason' if cat == 'carc' else 'Remittance Advice Remark'} Codes (official wording at x12.org)",
+                       "url": f"https://x12.org/codes/{'claim-adjustment-reason-codes' if cat == 'carc' else 'remittance-advice-remark-codes'}"},
+            "cols": ["code", "element", "topics", "start", "stop", "replacement", "alert"], "rows": out[cat]})
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     build_providers()
     build_icd()
     build_hcpcs()
     build_pos()
+    build_x12()

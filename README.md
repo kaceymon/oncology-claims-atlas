@@ -1,9 +1,9 @@
-# Oncology Claims Atlas
+# Claims Atlas
 
 A static, searchable reference for US health insurance claims with an oncology focus – built for studying.
 Plain HTML/CSS/JS, no build step, works on GitHub Pages (and by opening `index.html` locally).
 
-## What's inside (~11,700 entries)
+## What's inside (~13,200 entries)
 
 | Section | Count | Source |
 |---|---|---|
@@ -13,9 +13,9 @@ Plain HTML/CSS/JS, no build step, works on GitHub Pages (and by opening `index.h
 | HCPCS modifiers | 364 | CMS – public domain |
 | Place of service | 53 | CMS – public domain |
 | Oncology CPT codes (plain-language labels) | 151 | Code numbers only; descriptors are © AMA and not reproduced |
-| Denial reason codes (CARC) and remark codes (RARC) | 116 | Paraphrased; official text © X12, linked |
+| Every X12 reason code (CARC) and remark code (RARC) | 408 + 1,216 | Code, status, topic and affected data element; ~120 have hand-written plain-language guides. Official wording © X12, linked |
 | Claim forms & types, bill types, revenue codes, payers, care settings, appeals, HIPAA, topics, glossary | ~240 | Hand-written summaries of public CMS/HHS/DOL sources |
-| Denial playbooks, fill-in templates, study scenarios | 60 | Original content |
+| Denial playbooks, fill-in templates, study quiz scenarios | 85 | Original content |
 
 Features: smart search (questions, phrases, synonyms like "DOB"/"PA", drug brand names, CO-16 style codes,
 payer numeric codes like 00857, typo suggestions), category facets, detail pages with official-source links,

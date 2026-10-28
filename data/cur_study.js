@@ -27,6 +27,12 @@ OCA.add("rarc", [
 
 // ---- Study deck ----
 // fields: remit (what the 835/EOB shows), title, scenario, owes, billPatient, route, steps[], why, topic, payer note
+// Multiple-choice answer keys used by Study mode (see STUDY_CHOICES).
+const STUDY_CHOICES = {
+  owes: { provider: "Provider – it's a write-off", patient: "Patient (or their secondary insurance)", neither: "Nobody – it's informational", depends: "Depends on the group code" },
+  bill: { no: "No", yes: "Yes", conditional: "Only in specific cases" },
+  route: { fix: "Fix the claim and resubmit", appeal: "Appeal / request reconsideration", records: "Send the records they asked for", auth: "Get or update the auth / referral", rebill: "Bill the right payer / fix COB", writeoff: "Write it off", none: "Nothing to fix – post it and move on" },
+};
 function card(c) {
   const steps = c.steps.map(s => `<li>${s}</li>`).join("");
   return {
@@ -37,7 +43,7 @@ function card(c) {
 <div><span>On the remit</span><b class="mono">${c.remit}</b></div>
 <div><span>Who owes it</span><b>${c.owes}</b></div>
 <div><span>Bill the patient?</span><b class="${c.billPatient.startsWith("No") ? "no" : "yes"}">${c.billPatient}</b></div>
-<div><span>Fix or appeal?</span><b>${c.route}</b></div></div>
+<div><span>Right move</span><b>${c.route}</b></div></div>
 <h4>Scenario</h4><p>${c.scenario}</p>
 <h4>Next steps</h4><ol class="steps">${steps}</ol>
 <h4>Why</h4><p>${c.why}</p>${c.payer ? `<h4>Payer notes</h4><p>${c.payer}</p>` : ""}`,
@@ -169,5 +175,163 @@ const STUDY_CARDS = [
     owes: "Depends on the group code: CO = provider, PR = patient", billPatient: "Only if PR and allowed by law/contract", route: "Network exception / appeal",
     steps: ["Read the group code – it decides who's liable.", "Request a network gap exception / single-case agreement, retro if possible.", "Appeal on lack of in-network expertise.", "Check No Surprises Act protections."],
     why: "Network rules depend on plan type; HMOs usually cover no out-of-network care except emergencies or approved exceptions.", rel: ["carc:242", "template:network-gap", "topic:no-surprises"], tags: ["network"] },
+
+  // ---- payment posting ----
+  { id: "co45", topic: "Payment & posting", title: "Contractual write-off on a paid claim", remit: "CO-45 · PR-2",
+    scenario: "In-network infusion billed at $5,000. Allowed $1,800; plan paid $1,440; PR-2 $360; CO-45 $3,200.",
+    owes: "Provider for the $3,200 (CO-45); patient for the $360 (PR-2)", billPatient: "Only the PR-2 $360 – never the CO-45", route: "Nothing to fix – post it",
+    steps: ["Post CO-45 as a contractual adjustment.", "Bill the $360 PR-2 to the secondary or the patient.", "Spot-check the allowed amount against the contract rate – a short payment is a contract dispute, not an appeal."],
+    why: "CO-45 is the gap between your charge and the negotiated rate. In-network providers agreed to accept the allowed amount.", rel: ["carc:45", "carc:2", "term:group-codes"], tags: ["posting"] },
+  { id: "copay", topic: "Payment & posting", title: "Office visit copay", remit: "PR-3",
+    scenario: "Established-patient oncology visit; the plan paid the rest and applied a $40 copay (PR-3) that wasn't collected at check-in.",
+    owes: "Patient", billPatient: "Yes", route: "Nothing to fix – post it",
+    steps: ["Post the payment.", "Send the patient a statement for $40 (or charge the card on file if they authorised it).", "Fix front-desk collection for future visits."],
+    why: "PR = patient responsibility; a copay is part of the patient's plan cost-sharing.", rel: ["carc:3", "term:group-codes"], tags: ["posting"] },
+  { id: "oa23", topic: "Payment & posting", title: "Secondary payer shows OA-23", remit: "OA-23",
+    scenario: "Medigap remit shows OA-23 for the amount Medicare already paid and adjusted.",
+    owes: "Nobody – it's the primary's adjudication", billPatient: "No (bill only any remaining PR amount)", route: "Nothing to fix – post it",
+    steps: ["Post OA-23 as informational.", "Check for any PR balance remaining after the secondary paid.", "Close the claim if the balance is zero."],
+    why: "OA-23 just shows the prior payer's effect on this claim.", rel: ["carc:23", "claim:secondary"], tags: ["posting", "cob"] },
+  { id: "seq", topic: "Payment & posting", title: "Medicare sequestration reduction", remit: "CO-253",
+    scenario: "Every Medicare line shows a 2% CO-253 reduction.",
+    owes: "Provider – it's a federal payment reduction", billPatient: "No", route: "Nothing to fix – post it",
+    steps: ["Post as a contractual adjustment.", "Don't move it to the patient."],
+    why: "Sequestration reduces Medicare's payment; it isn't patient cost-sharing.", rel: ["carc:253"], tags: ["posting", "medicare"] },
+  { id: "n857", topic: "Payment & posting", title: "Claim reversed – copay refund owed", remit: "N857",
+    scenario: "After a COB correction the plan reprocessed a visit as secondary. The new remit carries N857; the patient paid a $50 copay at the visit.",
+    owes: "Nobody now – the patient's copay no longer applies", billPatient: "No – refund the $50", route: "Nothing to fix – post it",
+    steps: ["Post the reversal and the new adjudication.", "Refund the patient's $50 copay (or apply it to another balance only if your policy and the patient allow).", "Note the refund on the account."],
+    why: "N857 tells you the claim was adjusted/reversed and any collected copay should go back to the member. A payer's own 5-digit code like 00857 is different – check its legend.", rel: ["rarc:N857", "hipaa:remark-codes"], tags: ["posting", "refund"] },
+
+  // ---- coding ----
+  { id: "pos-hopd", topic: "Coding", title: "Office POS on a hospital-outpatient service", remit: "CO-5 + M77",
+    scenario: "The oncologist billed POS 11 for chemo given in the hospital's on-campus infusion center.",
+    owes: "Provider", billPatient: "No", route: "Fix the claim and resubmit",
+    steps: ["Change POS to 22 (on-campus outpatient hospital).", "Expect the facility rate for the professional service – the hospital bills the facility part.", "Send a corrected claim."],
+    why: "POS decides facility vs non-facility payment; billing office POS for a hospital setting double-pays the practice expense.", rel: ["carc:5", "rarc:M77", "pos:22", "pos:11"], tags: ["pos"] },
+  { id: "mod26", topic: "Modifiers", title: "Pathologist billed global instead of professional", remit: "CO-4",
+    scenario: "A pathologist read slides prepared by the hospital lab and billed 88305 without modifier 26.",
+    owes: "Provider", billPatient: "No", route: "Fix the claim and resubmit",
+    steps: ["Add modifier 26 (professional component) – the hospital owns the technical part.", "Send a corrected claim."],
+    why: "Global billing claims both components; only the professional part was performed by the pathologist.", rel: ["carc:4", "cpt:88305", "modifier:TC"], tags: ["modifier", "pathology"] },
+  { id: "two-initial", topic: "Coding", title: "Two 'initial' infusion codes in one visit", remit: "CO-236",
+    scenario: "Same visit: chemo infusion (96413) then an antiemetic infusion billed as 96365 (initial).",
+    owes: "Provider", billPatient: "No", route: "Fix the claim and resubmit",
+    steps: ["Keep 96413 as the initial service.", "Rebill the second infusion as a sequential add-on (96367).", "Send a corrected claim."],
+    why: "Only one initial service per encounter; later infusions use sequential/concurrent add-on codes.", rel: ["carc:236", "cpt:96413", "cpt:96367", "cpt:96365", "topic:chemo-admin"], tags: ["infusion", "ncci"] },
+  { id: "hydration", topic: "Coding", title: "Hydration billed during chemo", remit: "CO-97 + M15",
+    scenario: "Saline ran through the same line during the chemo infusion as the drug's diluent/keep-open fluid; hydration (96360) was billed separately.",
+    owes: "Provider", billPatient: "No", route: "Write it off",
+    steps: ["Confirm the fluid was incidental to the chemo (not separately ordered hydration with its own time).", "Accept the bundling and write the line off.", "Bill hydration only when it is medically necessary on its own and documented with start/stop times."],
+    why: "Fluid used to administer the drug is part of the administration service.", rel: ["carc:97", "rarc:M15", "cpt:96360"], tags: ["infusion", "bundling"] },
+  { id: "code-deleted", topic: "Coding", title: "Old drug code used after the quarterly update", remit: "CO-181",
+    scenario: "A newer drug billed in January with the temporary C-code it had last year; it got a permanent J-code on January 1.",
+    owes: "Provider", billPatient: "No", route: "Fix the claim and resubmit",
+    steps: ["Look up the current code in the quarterly HCPCS file.", "Recalculate units for the new code's descriptor amount (it may differ).", "Send a corrected claim."],
+    why: "Codes must be valid on the date of service.", rel: ["carc:181", "topic:noc-drugs"], tags: ["code update", "drugs"] },
+  { id: "icd-oct", topic: "Coding", title: "Diagnosis code changed on October 1", remit: "CO-146",
+    scenario: "A claim for an October 5 visit used a diagnosis code that was expanded to more specific subcodes in the new fiscal year.",
+    owes: "Provider", billPatient: "No", route: "Fix the claim and resubmit",
+    steps: ["Pick the new, more specific code supported by the note.", "Update the EHR problem list/favorites.", "Send a corrected claim."],
+    why: "ICD-10-CM updates every October 1; the code must be valid on the DOS.", rel: ["carc:146", "hipaa:code-sets"], tags: ["diagnosis", "code update"] },
+
+  // ---- credentialing ----
+  { id: "not-credentialed", topic: "Credentialing", title: "New oncologist billed before credentialing", remit: "CO-185 (or CO-B7)",
+    scenario: "A newly hired oncologist saw patients in their first month; the plan hadn't finished credentialing them.",
+    owes: "Provider", billPatient: "No", route: "Fix the claim and resubmit",
+    steps: ["Finish credentialing/enrollment and ask whether the plan allows a retroactive effective date.", "Resubmit once the effective date covers the DOS.", "Going forward, don't schedule a new provider's patients under that plan until they're effective."],
+    why: "The plan won't pay a rendering provider it hasn't approved for that date.", rel: ["carc:185", "carc:B7", "setting:enrollment"], tags: ["credentialing"] },
+  { id: "ordering-npi", topic: "Credentialing", title: "PET ordered by a physician not enrolled in Medicare", remit: "CO-183 + N265",
+    scenario: "Imaging center billed a PET/CT ordered by an outside surgeon who isn't enrolled in Medicare (PECOS).",
+    owes: "Provider", billPatient: "No", route: "Fix the claim and resubmit",
+    steps: ["Ask the ordering physician to enroll in PECOS (an ordering/referring-only enrollment is enough).", "Once active, resubmit with their NPI and name exactly as enrolled."],
+    why: "Medicare only pays for certain ordered services when the orderer is enrolled.", rel: ["carc:183", "rarc:N265", "setting:imaging"], tags: ["ordering provider"] },
+  { id: "name-change", topic: "Missing data", title: "Patient's name changed after marriage", remit: "CO-140",
+    scenario: "Patient registered under her new married name; the plan still has her maiden name.",
+    owes: "Provider", billPatient: "No", route: "Fix the claim and resubmit",
+    steps: ["Bill with the name exactly as the plan has it (check the 271).", "Ask the patient to update her name with the plan/employer.", "Resubmit."],
+    why: "Name and ID must match the payer's member file.", rel: ["carc:140", "carc:31"], tags: ["demographics"] },
+  { id: "secondary-no-eob", topic: "Eligibility & COB", title: "Secondary claim without the primary's payment", remit: "CO-16 + MA04",
+    scenario: "Claim sent to the secondary plan without the primary payer's adjudication details.",
+    owes: "Provider", billPatient: "No", route: "Fix the claim and resubmit",
+    steps: ["Attach the primary payment and adjustments (line-level CAS on an electronic claim, or the EOB on paper).", "Resubmit to the secondary."],
+    why: "The secondary needs to know what the primary paid before it can pay its share.", rel: ["rarc:MA04", "claim:secondary"], tags: ["cob"] },
+  { id: "crossover-dup", topic: "Duplicates", title: "Sent the Medigap claim yourself after a crossover", remit: "OA-18 + N522",
+    scenario: "The biller sent a claim to the Medigap plan, but Medicare had already crossed it over automatically.",
+    owes: "Nobody – the crossover copy is being processed", billPatient: "No", route: "Nothing to fix – post it",
+    steps: ["Check the Medicare remit for the crossover indicator.", "Wait for the Medigap payment on the crossover claim.", "Don't resubmit."],
+    why: "Medicare's crossover already forwarded the claim to the supplemental plan.", rel: ["rarc:N522", "claim:crossover"], tags: ["cob", "duplicate"] },
+
+  // ---- records ----
+  { id: "records", topic: "Records", title: "Payer asks for records on a high-cost biologic", remit: "CO-252",
+    scenario: "A $28,000 drug claim is pended/denied pending medical records.",
+    owes: "Provider (until records arrive)", billPatient: "No", route: "Send the records they asked for",
+    steps: ["Send exactly what's asked: order, treatment plan, pathology, biomarkers, administration record.", "Use the payer's attachment channel with the request letter on top.", "Track the response deadline."],
+    why: "The payer needs documentation before adjudicating.", rel: ["carc:252", "template:records-cover", "response:records"], tags: ["records"] },
+  { id: "adr-missed", topic: "Records", title: "Records request missed – claim denied", remit: "CO-226 (Medicare ADR)",
+    scenario: "The Medicare contractor's 45-day ADR deadline passed without a response, and the claim denied.",
+    owes: "Provider", billPatient: "No", route: "Appeal / request reconsideration",
+    steps: ["File a redetermination with the complete records attached.", "Find why the ADR letter was missed (mail routing, portal alerts) and fix it."],
+    why: "A missed records request turns into a denial; the records still matter on appeal.", rel: ["carc:226", "appeal:medicare-l1", "template:medicare-redetermination"], tags: ["records", "medicare"] },
+
+  // ---- auth / coverage ----
+  { id: "auth-exceeded", topic: "Prior auth", title: "Dose went up – units exceed the auth", remit: "CO-198",
+    scenario: "The patient gained weight, so the weight-based dose rose above the units in the authorization.",
+    owes: "Provider", billPatient: "No", route: "Get or update the auth / referral",
+    steps: ["Ask the plan to update the authorization with the new dose (many allow this retroactively for weight/BSA changes).", "Resubmit or ask for reprocessing once it's updated.", "Re-check auth units whenever the dose changes."],
+    why: "The approved units cap what the plan will pay.", rel: ["carc:198", "response:units"], tags: ["prior auth", "units"] },
+  { id: "referral", topic: "Prior auth", title: "HMO patient seen without a referral", remit: "CO-288",
+    scenario: "An HMO member was referred by word of mouth; the PCP never issued a referral to oncology.",
+    owes: "Provider", billPatient: "No", route: "Get or update the auth / referral",
+    steps: ["Ask the PCP's office for the referral (retro if the plan allows).", "Resubmit with the referral on file.", "Check referral requirements at scheduling."],
+    why: "HMO plans require a PCP referral for specialist care.", rel: ["carc:288", "rarc:N286"], tags: ["referral", "hmo"] },
+  { id: "experimental", topic: "Medical necessity", title: "Proton therapy denied as investigational", remit: "CO-55",
+    scenario: "Commercial plan denied proton therapy for a pediatric brain tumor as experimental/investigational.",
+    owes: "Provider under most network contracts", billPatient: "Only in specific cases (e.g. a valid pre-service waiver where the contract allows)", route: "Appeal / request reconsideration",
+    steps: ["Pull the plan's E/I definition and its proton therapy policy.", "Appeal with guideline support and why photons are worse for this patient (dose to developing brain).", "Request external review if upheld."],
+    why: "This is a clinical/policy disagreement – appeal it.", rel: ["carc:55", "template:experimental-appeal", "appeal:external-review", "cpt:77525"], tags: ["experimental", "radiation"] },
+  { id: "site", topic: "Medical necessity", title: "Infusion denied for hospital setting", remit: "CO-58",
+    scenario: "The plan's site-of-care policy wants maintenance infusions at a home or office site, but the patient had a severe reaction last cycle.",
+    owes: "Provider", billPatient: "No", route: "Appeal / request reconsideration",
+    steps: ["Request a site-of-care exception with the reaction documented.", "Appeal the denied dates with the same evidence.", "Ask for an exception period for the rest of the regimen."],
+    why: "Most site-of-care policies allow exceptions for reaction history or need for hospital monitoring.", rel: ["carc:58", "template:site-of-care", "response:site-of-care"], tags: ["site of care"] },
+  { id: "wig", topic: "Patient responsibility", title: "Medicare and a wig after chemo", remit: "PR-96 + N425",
+    scenario: "A DME supplier billed Medicare for a wig (A9282) with modifier GY.",
+    owes: "Patient", billPatient: "Yes – it's statutorily excluded", route: "Nothing to fix – post it",
+    steps: ["Bill the patient (a voluntary notice beforehand is good practice).", "Check a secondary plan or state law – some plans cover cranial prostheses.", "Point the patient to charity wig programs."],
+    why: "Medicare excludes wigs by law, so the patient is responsible.", rel: ["rarc:N425", "carc:96", "hcpcs:A9282", "modifier:GY"], tags: ["non-covered", "medicare"] },
+  { id: "no-abn", topic: "Medical necessity", title: "Medicare frequency limit – no ABN signed", remit: "CO-50 (modifier GZ)",
+    scenario: "A test was repeated above Medicare's frequency limit without a clinical change in the notes, and nobody gave the patient an ABN.",
+    owes: "Provider", billPatient: "No – without a valid ABN the provider is liable", route: "Write it off",
+    steps: ["Write it off – the documentation doesn't support necessity, so an appeal won't win.", "Train staff to issue an ABN before services likely to be denied.", "If the record did show a clinical change, appeal instead."],
+    why: "Without an ABN, Medicare's limitation-of-liability rules protect the patient.", rel: ["carc:50", "topic:abn", "modifier:GZ", "study:abn"], tags: ["medicare", "abn"] },
+  { id: "tf-proof", topic: "Timely filing", title: "Timely filing denial but you have proof", remit: "CO-29",
+    scenario: "Commercial claim denied for timely filing, but your clearinghouse has a payer 277CA acceptance dated within the limit.",
+    owes: "Provider (until reversed)", billPatient: "No", route: "Appeal / request reconsideration",
+    steps: ["Pull the 277CA acceptance report showing the payer received it in time.", "File a reconsideration with the proof attached.", "Track it – these usually overturn quickly."],
+    why: "Proof of timely receipt beats a timely-filing denial.", rel: ["carc:29", "template:timely-filing", "claim:277CA"], tags: ["timely filing"] },
 ];
+const STUDY_KEYS = { // [owes, bill, route]
+  "co16-dob": ["provider", "no", "fix"], "co16-subscriber-dob": ["provider", "no", "fix"], "co16-member-id": ["provider", "no", "fix"],
+  "jz-missing": ["provider", "no", "fix"], "mod25": ["provider", "no", "fix"], "q1-missing": ["provider", "no", "fix"], "ndc-missing": ["provider", "no", "fix"],
+  "auth-not-on-claim": ["provider", "no", "fix"], "auth-wrong-drug": ["provider", "no", "auth"], "no-auth": ["provider", "no", "auth"],
+  "medical-necessity": ["provider", "no", "appeal"], "dx-specificity": ["provider", "no", "fix"], "deductible": ["patient", "yes", "none"],
+  "coinsurance": ["patient", "conditional", "none"], "timely": ["provider", "no", "writeoff"], "cob": ["provider", "no", "rebill"],
+  "wrong-payer": ["provider", "no", "rebill"], "termed": ["provider", "conditional", "rebill"], "units": ["provider", "no", "fix"], "noc": ["provider", "no", "fix"],
+  "duplicate": ["neither", "no", "none"], "hospice": ["provider", "no", "fix"], "abn": ["patient", "yes", "none"], "oon": ["depends", "conditional", "appeal"],
+  "co45": ["provider", "conditional", "none"], "copay": ["patient", "yes", "none"], "oa23": ["neither", "no", "none"], "seq": ["provider", "no", "none"],
+  "n857": ["neither", "no", "none"], "pos-hopd": ["provider", "no", "fix"], "mod26": ["provider", "no", "fix"], "two-initial": ["provider", "no", "fix"],
+  "hydration": ["provider", "no", "writeoff"], "code-deleted": ["provider", "no", "fix"], "icd-oct": ["provider", "no", "fix"],
+  "not-credentialed": ["provider", "no", "fix"], "ordering-npi": ["provider", "no", "fix"], "name-change": ["provider", "no", "fix"],
+  "secondary-no-eob": ["provider", "no", "fix"], "crossover-dup": ["neither", "no", "none"], "records": ["provider", "no", "records"],
+  "adr-missed": ["provider", "no", "appeal"], "auth-exceeded": ["provider", "no", "auth"], "referral": ["provider", "no", "auth"],
+  "experimental": ["provider", "conditional", "appeal"], "site": ["provider", "no", "appeal"], "wig": ["patient", "yes", "none"],
+  "no-abn": ["provider", "no", "writeoff"], "tf-proof": ["provider", "no", "appeal"],
+};
+for (const c of STUDY_CARDS) {
+  const k = STUDY_KEYS[c.id];
+  if (!k) throw new Error("study card without answer key: " + c.id);
+  c.key = { owes: k[0], bill: k[1], route: k[2] };
+}
+OCA.studyChoices = STUDY_CHOICES;
 OCA.add("study", STUDY_CARDS.map(card));

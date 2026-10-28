@@ -33,13 +33,31 @@
     hcpcs: ["Series", "Medicare coverage"],
     cpt: ["Group"],
     study: ["Topic"],
+    carc: ["Topic", "Status"],
+    rarc: ["Topic", "Status"],
   };
 
   // ---------- normalise records ----------
   const R = OCA.records;
   const byId = new Map();
   for (const r of R) {
-    if (!r.curated) {
+    if (r.x12) {
+      // full X12 index: code, dates, derived topics (official wording lives at x12.org)
+      const g = k => r.x12.raw[r.x12.ix[k]];
+      const x = r.x12;
+      x.topics = g("topics"); x.element = g("element"); x.start = g("start"); x.stop = g("stop"); x.repl = g("replacement"); x.alert = g("alert");
+      x.status = x.stop ? `Retired ${x.stop}${x.repl ? ` – use ${x.repl}` : ""}` : `Active since ${x.start.slice(-4)}`;
+      if (!r.curated) {
+        const kind = r.cat === "carc" ? "Reason code" : "Remark code";
+        r.title = x.element ? `${x.element} – missing, incomplete or invalid` : `${kind} ${r.code} · ${x.topics.join(", ")}`;
+        r.summary = `${x.alert ? "Informational alert · " : ""}${x.topics.join(" · ")} · ${x.status}`;
+        r.tags = x.topics.concat(x.stop ? ["retired"] : ["active"], x.element ? ["missing info"] : []);
+        r.onc = 1;
+      } else {
+        r.tags = [...new Set(r.tags.concat(x.topics))];
+      }
+      r.facets = { Topic: x.topics[0], Status: x.stop ? "Retired" : "Active" };
+    } else if (!r.curated) {
       const g = k => r.raw[r.ix[k]];
       r.facets = {};
       if (r.cat === "provider") {
@@ -175,14 +193,37 @@
       const isCode = /\d/.test(w) && /^[a-z]{0,3}\d[\w.]*$/.test(w);
       const alts = new Set([w]);
       if (isCode) alts.add(w.replace(/[.\-]/g, ""));
+      // a bare number could be a CARC (255) or the digits of a RARC (N255, M25, MA130)
+      if (/^\d{1,4}$/.test(w)) ["n", "m", "ma"].forEach(p => alts.add(p + w));
       if (SYN[w]) SYN[w].forEach(a => alts.add(a));
       if (BRANDS[w]) alts.add(BRANDS[w]);
       if (!isCode) { const s = stem(w); if (s.length >= 3) alts.add(s); }
-      terms.push({ alts: [...alts], code: isCode ? w.replace(/[.\-]/g, "") : null, w: isCode ? 3 : (w.length <= 2 ? 0.5 : 1), label: w });
+      // bare numbers match whole numbers in text, not digits inside other codes (255 ≠ 32555)
+      const rx = /^\d+$/.test(w) ? new RegExp(`(^|[^0-9a-z.])${w}(?![0-9])`) : null;
+      terms.push({ alts: rx ? [w] : [...alts], codeAlts: [...alts], rx, code: isCode ? w.replace(/[.\-]/g, "") : null, w: isCode ? 3 : (w.length <= 2 ? 0.5 : 1), label: w });
     }
-    const phrase = words.filter(w => !STOP.has(w)).join(" ");
-    return { terms, notes, phrase: phrase.length > 6 ? phrase : "" };
+    // words like "hipaa code denial" describe what kind of thing you want; when the query has
+    // something more specific (a number, a topic), they steer ranking instead of filtering.
+    const content = terms.filter(t => !GENERIC[t.label]);
+    const ctx = new Set();
+    if (content.length) {
+      for (const t of terms) if (GENERIC[t.label]) GENERIC[t.label].forEach(c => ctx.add(c));
+      terms.splice(0, terms.length, ...content);
+    }
+    const topicWords = words.map(w => TOPIC_WORDS[w]).filter(Boolean);
+    const phrase = words.filter(w => !STOP.has(w) && !GENERIC[w]).join(" ");
+    return { terms, notes, ctx, topicWords, phrase: phrase.length > 6 ? phrase : "" };
   }
+  const DENIAL = ["carc", "rarc", "response", "study"];
+  const GENERIC = {
+    code: [], codes: [], number: [], standard: [], meaning: [], claim: ["claim"], claims: ["claim"], insurance: [],
+    denial: DENIAL, denials: DENIAL, denied: DENIAL, deny: DENIAL, reason: ["carc"], adjustment: ["carc"], carc: ["carc"],
+    remark: ["rarc"], remarks: ["rarc"], rarc: ["rarc"], eob: DENIAL, remit: DENIAL, hipaa: ["carc", "rarc", "hipaa"], x12: ["carc", "rarc"],
+  };
+  const TOPIC_WORDS = { diagnosis: "Diagnosis", dx: "Diagnosis", icd: "Diagnosis", auth: "Authorization / referral", authorization: "Authorization / referral",
+    referral: "Authorization / referral", modifier: "Modifier", mod: "Modifier", ndc: "Drug / NDC", drug: "Drug / NDC", cob: "Coordination of benefits",
+    eligibility: "Eligibility / coverage dates", provider: "Provider / credentialing", npi: "Provider / credentialing", taxonomy: "Provider / credentialing",
+    timely: "Timely filing", duplicate: "Duplicate", records: "Records / attachments", bundled: "Bundling / NCCI", bundling: "Bundling / NCCI", units: "Units / frequency" };
 
   let vocab = null;
   function suggest(word) {
@@ -208,8 +249,9 @@
   }
 
   function search(query, opts) {
-    const { terms, notes, phrase } = parseQuery(query);
+    const { terms, notes, phrase, ctx, topicWords } = parseQuery(query);
     const info = { notes, partial: false, didYouMean: null, terms };
+    const exact = terms.map(() => []);
     const totalW = terms.reduce((s, t) => s + t.w, 0);
     const strict = [], loose = [];
     const seen = terms.map(() => false);
@@ -220,14 +262,14 @@
       terms.forEach((t, i) => {
         let hit = false;
         for (const a of t.alts) {
-          if (!r.hay.includes(a)) continue;
+          if (t.rx ? !t.rx.test(r.hay) : !r.hay.includes(a)) continue;
           hit = true;
           if (r.titleL.includes(a)) score += 20 * t.w;
           if (r.titleL.startsWith(a)) score += 8;
           break;
         }
         if (t.codeCat && r.cat !== t.codeCat) { /* group-code terms only match reason codes by code */ }
-        else if (t.code && (r.codeNorm === t.code || t.alts.includes(r.codeNorm))) { hit = true; score += 1000; }
+        else if (t.code && (r.codeNorm === t.code || (t.codeAlts || t.alts).includes(r.codeNorm))) { hit = true; score += 1000; exact[i].push(r); }
         else if (t.code && !t.codeCat && t.code.length > 1 && r.codeNorm.startsWith(t.code)) { hit = true; score += 250 - Math.min(150, r.codeNorm.length * 5); }
         if (hit) { got += t.w; seen[i] = true; }
       });
@@ -235,6 +277,8 @@
       if (phrase) { if (r.titleL.includes(phrase)) score += 150; else if (r.hay.includes(phrase)) score += 60; }
       if (r.curated) score += 15;
       if (r.onc) score += 3;
+      if (ctx.has(r.cat)) score += 120;
+      if (topicWords.length && r.x12 && topicWords.some(tw => r.x12.topics.includes(tw))) score += 80;
       if (got >= totalW) strict.push([score + 500, r]);
       else loose.push([score + 400 * (got / totalW), r, got / totalW]);
     }
@@ -242,6 +286,29 @@
     if (strict.length < 12 && terms.length > 1) {
       const extra = loose.filter(x => x[2] >= 0.5);
       if (extra.length) { info.partial = strict.length === 0; out = strict.concat(extra); }
+    }
+    // explain bare numbers: which code lists they hit, and whether that fits what the user described
+    terms.forEach((t, i) => {
+      if (!/^\d{1,4}$/.test(t.label)) return;
+      const hits = exact[i].filter(r => r.cat === "carc" || r.cat === "rarc");
+      if (!hits.length && !exact[i].length) {
+        notes.push(`No standard code list has <b>${esc(t.label)}</b>. If it's printed on an EOB or portal, it's most likely the payer's own explanation code – check that payer's code legend. <a href="${itemHref(byId.get("hipaa:remark-codes") || { cat: "hipaa", code: "remark-codes" })}">Standard vs payer codes</a>`);
+        return;
+      }
+      if (!hits.length) return;
+      const list = hits.map(r => `<a href="${itemHref(r)}">${r.cat === "carc" ? "CARC" : "RARC"} ${esc(r.code)}</a> (${esc(r.x12 ? r.x12.topics.join(", ") : r.title)}${r.x12?.stop ? ", retired" : ""})`).join(" and ");
+      const wanted = topicWords.filter(tw => !hits.some(r => r.x12?.topics.includes(tw)));
+      if (wanted.length) {
+        const tw = wanted[0];
+        notes.push(`In the standard HIPAA lists, <b>${esc(t.label)}</b> is ${list} – neither is about ${esc(tw.toLowerCase())}. If your remit calls ${esc(t.label)} a ${esc(tw.toLowerCase())} denial, it's probably the <b>payer's own code</b>; the standard ${esc(tw.toLowerCase())} codes are <a href="${href("search", { cat: "carc", "f.Topic": tw })}">reason codes</a> and <a href="${href("search", { cat: "rarc", "f.Topic": tw })}">remark codes</a> tagged ${esc(tw)}.`);
+      } else if (hits.length > 1) {
+        notes.push(`<b>${esc(t.label)}</b> appears in more than one list: ${list}. Check whether your remit shows it as a reason code (with CO/PR/OA) or a remark code (starts with N, M or MA).`);
+      }
+    });
+    if (topicWords.length && !terms.some(t => t.code)) {
+      const tw = topicWords[0];
+      const n = R.filter(r => r.x12 && r.x12.topics.includes(tw)).length;
+      if (n && [...ctx].some(c => c === "carc" || c === "rarc")) notes.push(`All standard codes about <b>${esc(tw)}</b> (${n}): <a href="${href("search", { cat: "carc", "f.Topic": tw })}">reason codes (CARC)</a> · <a href="${href("search", { cat: "rarc", "f.Topic": tw })}">remark codes (RARC)</a>`);
     }
     if (!out.length && terms.length) {
       const fixes = terms.map((t, i) => (!seen[i] && !t.code && t.label.length >= 4) ? suggest(t.label) : null);
@@ -255,7 +322,7 @@
 
   // ---------- views ----------
   function viewHome() {
-    document.title = "Oncology Claims Atlas";
+    document.title = "Claims Atlas";
     const tiles = CAT_ORDER.map(c => `
       <a class="tile b-${c}" href="${href("search", { cat: c })}">
         <div class="tile-top">${badge(c)}<span class="count">${nf.format(counts[c] || 0)}</span></div>
@@ -272,7 +339,7 @@
     ].filter(([id]) => byId.has(id)).map(([id, l]) => `<a class="chip" href="${itemHref(byId.get(id))}">${esc(l)}</a>`).join("");
     app.innerHTML = `
       <section class="hero">
-        <span class="eyebrow">Oncology · US health insurance claims</span>
+        <span class="eyebrow">US health insurance claims · oncology deep-dive</span>
         <h1>Every claim type, provider type, code and denial – <span class="grad-text">searchable.</span></h1>
         <p class="lede">${nf.format(R.length)} entries built from public federal code sets, with plain-language denial playbooks, appeal pathways and fill-in templates.</p>
         <form class="bigsearch" id="homeSearch" role="search">
@@ -301,7 +368,7 @@
     for (const r of all) catCounts[r.cat] = (catCounts[r.cat] || 0) + 1;
     const results = all.filter(r => (!cat || r.cat === cat) && Object.entries(facets).every(([k, v]) => r.facets?.[k] === v));
     const limit = Math.max(50, +(q.n || 100));
-    document.title = (query ? `“${query}” – ` : "") + (cat ? CATS[cat]?.label + " – " : "") + "Oncology Claims Atlas";
+    document.title = (query ? `“${query}” – ` : "") + (cat ? CATS[cat]?.label + " – " : "") + "Claims Atlas";
 
     const qWith = patch => { const n = Object.assign({}, q, patch); for (const k in n) if (n[k] === "" || n[k] == null) delete n[k]; delete n.n; return href("search", n); };
     const catLinks = [`<a class="facet ${!cat ? "on" : ""}" href="${qWith({ cat: "", ...clearFacets(q) })}">All <span>${nf.format(all.length)}</span></a>`]
@@ -331,7 +398,9 @@
 
     app.innerHTML = `
       <div class="search-layout">
-        <aside class="sidebar" id="sidebar">
+        <div class="sheet-backdrop" id="sheetBackdrop"></div>
+        <aside class="sidebar" id="sidebar" aria-label="Filters">
+          <div class="sheet-head"><b>Filters</b><button class="btn ghost small" id="closeFilters" type="button">Done</button></div>
           <label class="toggle"><input type="checkbox" id="oncOnly" ${onc ? "checked" : ""}> Oncology-relevant only</label>
           <div class="facet-group"><h4>Category</h4>${catLinks}</div>
           ${facetHtml}
@@ -341,9 +410,11 @@
             <input id="q" type="search" value="${esc(query)}" placeholder="Search codes, names, denials, templates…" aria-label="Search" autocomplete="off">
             <button class="btn primary">Search</button>
           </form>
+          <div class="cat-strip scroll-x">${[`<a class="chip ${!cat ? "on" : ""}" href="${qWith({ cat: "", ...clearFacets(q) })}">All ${nf.format(all.length)}</a>`]
+            .concat(CAT_ORDER.filter(c => catCounts[c]).map(c => `<a class="chip ${cat === c ? "on" : ""}" href="${qWith({ cat: cat === c ? "" : c, ...clearFacets(q) })}">${esc(CATS[c].short)} ${nf.format(catCounts[c])}</a>`)).join("")}</div>
           <div class="result-meta">
             <span><b>${nf.format(results.length)}</b> result${results.length === 1 ? "" : "s"}${cat ? ` in ${esc(CATS[cat].label)}` : ""}${Object.entries(facets).map(([k, v]) => ` · ${esc(k)}: ${esc(v)}`).join("")}</span>
-            <button class="btn ghost small" id="toggleFilters" type="button">Filters</button>
+            <button class="btn ghost small" id="toggleFilters" type="button">Filters${Object.keys(facets).length + (onc ? 1 : 0) ? ` · ${Object.keys(facets).length + (onc ? 1 : 0)}` : ""}</button>
             ${cat ? `<span class="muted small">${esc(CATS[cat].blurb)}</span>` : ""}
           </div>
           ${all.info.notes.map(n => `<div class="note">${n}</div>`).join("")}
@@ -358,7 +429,11 @@
     input.oninput = () => { clearTimeout(t); t = setTimeout(() => { history.replaceState(null, "", qWith({ q: input.value.trim() })); viewSearch(Object.assign({}, q, { q: input.value.trim() })); const i = $("#q"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 180); };
     $("#searchForm").onsubmit = e => { e.preventDefault(); location.hash = qWith({ q: input.value.trim() }); };
     $("#oncOnly").onchange = e => { location.hash = qWith({ onc: e.target.checked ? "1" : "" }); };
-    $("#toggleFilters").onclick = () => $("#sidebar").classList.toggle("open");
+    const sheet = open => { $("#sidebar").classList.toggle("open", open); $("#sheetBackdrop").classList.toggle("open", open); document.body.classList.toggle("noscroll", open); };
+    document.body.classList.remove("noscroll");
+    $("#toggleFilters").onclick = () => sheet(true);
+    $("#closeFilters").onclick = () => sheet(false);
+    $("#sheetBackdrop").onclick = () => sheet(false);
     if (!query && !window.matchMedia("(max-width: 760px)").matches) input.focus();
   }
   function clearFacets(q) { const o = {}; for (const k in q) if (k.startsWith("f.")) o[k] = ""; return o; }
@@ -376,11 +451,37 @@
     return `<div class="panel"><h3>Related</h3><div class="rel">${ids.map(id => { const x = byId.get(id); return `<a class="rel-item" href="${itemHref(x)}">${badge(x.cat)}${codeTag(x)}<span>${esc(clip(x.title, 70))}</span></a>`; }).join("")}</div></div>`;
   }
 
+  // topic -> [what to do, related ids] for X12 codes that have no hand-written page
+  const TOPIC_HELP = {
+    "Diagnosis": ["Diagnosis problems: check the code is valid for the date of service, coded to full specificity, pointed to the right line, and on the payer's covered-diagnosis list for that service. Coding errors → corrected claim; coverage disputes → appeal.", ["carc:11", "carc:167", "carc:146", "rarc:M76", "rarc:MA63", "study:dx-specificity", "response:medical-necessity"]],
+    "Authorization / referral": ["Find any auth on file and compare drug/code, units, dates, NPI and site. Mismatch → fix the auth or the claim; no auth → retro-auth request, then appeal.", ["carc:197", "carc:284", "rarc:M62", "response:prior-auth-missing", "study:auth-not-on-claim"]],
+    "Modifier": ["Add or correct the modifier only when the record supports it, then send a corrected claim.", ["rarc:N822", "rarc:N823", "carc:4", "study:jz-missing"]],
+    "Drug / NDC": ["Check HCPCS units vs the descriptor, the 11-digit NDC and its unit qualifier/quantity, and waste modifiers.", ["rarc:M119", "topic:ndc-billing", "study:ndc-missing", "topic:jw-jz"]],
+    "Coordination of benefits": ["Confirm who's primary, update COB with the patient and payers, then bill in the right order with the primary's adjudication.", ["carc:22", "rarc:MA04", "response:cob", "study:cob"]],
+    "Patient / member data": ["Match the patient's name, DOB and member ID exactly to the payer's eligibility response, then resubmit.", ["rarc:N329", "rarc:N382", "carc:31", "study:co16-dob"]],
+    "Eligibility / coverage dates": ["Re-verify eligibility for the date of service and bill whoever covered that date.", ["carc:26", "carc:27", "response:eligibility-coverage"]],
+    "Provider / credentialing": ["Check NPI, taxonomy and enrollment/credentialing for the billing, rendering and ordering providers.", ["carc:185", "carc:183", "rarc:N255", "setting:enrollment", "study:not-credentialed"]],
+    "Timely filing": ["Find proof of timely submission (277CA) or a filing-limit exception; otherwise it's a write-off.", ["carc:29", "response:timely-filing", "study:tf-proof"]],
+    "Duplicate": ["Check claim status before resubmitting; work the original claim.", ["carc:18", "study:duplicate"]],
+    "Medical necessity / benefit": ["Read the payer policy and the plan's benefits. Coding issues → correct; clinical disagreement → appeal with records.", ["carc:50", "carc:96", "carc:204", "response:medical-necessity"]],
+    "Records / attachments": ["Send exactly what was requested through the payer's attachment channel and track the deadline.", ["carc:252", "carc:226", "response:records"]],
+    "Bundling / NCCI": ["Look up the NCCI edit; use 25/59/X modifiers only when documentation supports a separate service.", ["carc:97", "carc:236", "response:bundling"]],
+    "Units / frequency": ["Recalculate units from the code descriptor; check MUEs, auth units and frequency limits.", ["carc:151", "rarc:N362", "response:units"]],
+    "Place of service / bill type": ["Make the POS or type of bill match where and how the service was provided.", ["carc:5", "rarc:M77", "study:pos-hopd"]],
+    "Procedure code": ["Use a code that's valid on the date of service and matches the revenue code/service.", ["carc:181", "carc:189", "rarc:M51"]],
+    "Payment / contractual": ["Usually a posting item, not a denial: post the adjustment and bill any PR amount.", ["term:group-codes", "carc:45", "study:co45"]],
+  };
+
   function viewItem(cat, code) {
     const r = byId.get(`${cat}:${code}`);
     if (!r) { app.innerHTML = `<p class="empty">Not found. <a href="#/">Go home</a></p>`; return; }
-    document.title = `${isRealCode(r.code) ? r.code + " – " : ""}${r.title} – Oncology Claims Atlas`;
+    document.title = `${isRealCode(r.code) ? r.code + " – " : ""}${r.title} – Claims Atlas`;
     let main = "";
+    const x12Link = `<a href="${esc(OCA.sources[r.cat]?.url || "https://x12.org/codes")}" target="_blank" rel="noopener">official X12 wording ↗</a>`;
+    if (r.curated && r.x12) {
+      const x = r.x12;
+      main += `<p class="statusline"><span class="pill ${x.stop ? "retired" : "active"}">${esc(x.status)}</span> ${x.topics.map(t => `<a class="tag" href="${href("search", { cat: r.cat, "f.Topic": t })}">${esc(t)}</a>`).join(" ")} · ${x12Link}</p>`;
+    }
     if (r.curated) {
       main += r.summary && r.summary !== r.title ? `<p class="lede">${esc(r.summary)}</p>` : "";
       main += r.body || "";
@@ -408,6 +509,19 @@
       main += `<p>${esc(r.title)}</p>`;
       if (/^J|^Q|^C9|^A9/.test(r.code)) main += `<p class="muted small">Billing units = dose given ÷ the amount in the descriptor. Medicare payment limits per unit are in the quarterly <a href="https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files" target="_blank" rel="noopener">ASP pricing files</a>; single-dose containers need JW or JZ.</p>`;
       main += `<p><a href="https://www.cms.gov/medicare-coverage-database/search-results.aspx?keyword=${encodeURIComponent(r.code)}&areaId=all&docType=NCA,CAL,NCD,MEDCAC,TA,MCD,6,3,5,1,F,P" target="_blank" rel="noopener">Search Medicare coverage policies (NCD/LCD/articles) for ${esc(r.code)} ↗</a></p>`;
+    } else if (r.x12) {
+      const x = r.x12;
+      const kind = r.cat === "carc" ? "Claim Adjustment Reason Code (CARC)" : "Remittance Advice Remark Code (RARC)";
+      const replRec = x.repl && (byId.get(`carc:${x.repl}`) || byId.get(`rarc:${x.repl}`));
+      main += `<dl class="kv"><dt>Code</dt><dd><code>${esc(r.code)}</code> ${copyBtn(r.code)}</dd><dt>Type</dt><dd>${kind}${x.alert ? " – informational alert" : ""}</dd>
+        <dt>Status</dt><dd><span class="pill ${x.stop ? "retired" : "active"}">${x.stop ? "Retired" : "Active"}</span> since ${esc(x.stop || x.start)}${x.repl ? ` · replacement: ${replRec ? `<a href="${itemHref(replRec)}">${esc(x.repl)}</a>` : esc(x.repl)}` : ""}</dd>
+        <dt>Topic</dt><dd>${x.topics.map(t => `<a class="tag" href="${href("search", { cat: r.cat, "f.Topic": t })}">${esc(t)}</a>`).join(" ")}</dd>
+        ${x.element ? `<dt>Data element</dt><dd>${esc(x.element)}</dd>` : ""}</dl>`;
+      if (x.element) main += `<p>The payer says the <b>${esc(x.element.toLowerCase())}</b> on the claim is missing, incomplete or invalid. ${r.cat === "rarc" ? "This remark usually rides with CARC 16 (claim lacks information) under group code CO – the provider fixes the data and resubmits; the patient can't be billed for it." : ""}</p>`;
+      else main += `<p>This site doesn't have a hand-written explanation for ${esc(r.code)} yet. Read the ${x12Link} – search the page for <code>${esc(r.code)}</code> – then use the topic guide below.</p>`;
+      const help = TOPIC_HELP[x.topics[0]];
+      if (help) main += `<h4>Topic guide: ${esc(x.topics[0])}</h4><p>${help[0]}</p><div class="rel">${help[1].map(id => byId.get(id)).filter(Boolean).map(h => `<a class="rel-item" href="${itemHref(h)}">${badge(h.cat)}${codeTag(h)}<span>${esc(h.title)}</span></a>`).join("")}</div>`;
+      if (x.stop) main += `<p class="warn">Retired codes can still show up on old remits or from payers that haven't updated. On new claims the payer should be using the replacement.</p>`;
     } else {
       main += `<dl class="kv"><dt>Code</dt><dd><code>${esc(r.code)}</code> ${copyBtn(r.code)}</dd></dl><p>${esc(r.text || r.title)}</p>`;
     }
@@ -437,7 +551,8 @@
   function templateTool(r) {
     const fields = fieldsOf(r.template);
     return `
-      <div class="tpl">
+      <div class="tpl" id="tpl" data-tab="fill">
+        <div class="tpl-tabs" role="tablist"><button type="button" role="tab" data-tab="fill">Fill in <span id="tplCount"></span></button><button type="button" role="tab" data-tab="preview">Preview letter</button></div>
         <div class="tpl-head"><h3>Fill in the template</h3>
           <div class="tpl-actions"><button class="btn primary small" id="tplCopy">Copy letter</button><button class="btn small" id="tplDownload">Download .txt</button><button class="btn small" id="tplPrint">Print</button><button class="btn ghost small" id="tplClear">Clear fields</button></div></div>
         <p class="note subtle small">Patient details (name, date of birth, member ID) are left as <mark class="locked">[blanks]</mark> on purpose – this site never asks for them. Fill them in by hand after you print or paste the letter.</p>
@@ -463,6 +578,7 @@
       const vals = {};
       inputs.forEach(el => { vals[fields[+el.dataset.f]] = el.value; });
       try { localStorage.setItem(key, JSON.stringify(vals)); } catch { /* storage unavailable */ }
+      $("#tplCount").textContent = `${inputs.filter(el => el.value.trim()).length}/${inputs.length}`;
       const pre = $("#tplPreview");
       pre.innerHTML = esc(r.template).replace(/\{\{([^}]+)\}\}/g, (_, f) => {
         const name = f.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
@@ -474,6 +590,7 @@
     };
     let text = render();
     $("#tplForm").oninput = () => { text = render(); };
+    document.querySelectorAll(".tpl-tabs [data-tab]").forEach(b => b.onclick = () => { $("#tpl").dataset.tab = b.dataset.tab; $("#tpl").scrollIntoView({ block: "start", behavior: "smooth" }); });
     $("#tplCopy").onclick = () => copyText(render(), $("#tplCopy"));
     $("#tplDownload").onclick = () => {
       const a = document.createElement("a");
@@ -525,12 +642,13 @@
     };
   }
 
-  // ---------- study mode (flashcards from the "study" scenarios) ----------
-  const studyState = { order: null, idx: 0, revealed: false, topic: "", unknownOnly: false };
+  // ---------- study mode (multiple-choice quiz over the "study" scenarios) ----------
+  const studyState = { order: null, idx: 0, revealed: false, topic: "", unknownOnly: false, picks: {}, score: { right: 0, total: 0, streak: 0 } };
+  const QUESTIONS = [["owes", "Who owes this amount?"], ["bill", "Can you bill the patient?"], ["route", "What's the right move?"]];
   const loadKnown = () => { try { return new Set(JSON.parse(localStorage.getItem("oca-study-known") || "[]")); } catch { return new Set(); } };
   const saveKnown = s => { try { localStorage.setItem("oca-study-known", JSON.stringify([...s])); } catch { /* storage unavailable */ } };
   function viewStudy(q) {
-    document.title = "Study – Oncology Claims Atlas";
+    document.title = "Study – Claims Atlas";
     const cards = R.filter(r => r.cat === "study");
     const topics = [...new Set(cards.map(c => c.study.topic))];
     const topic = q.topic || "";
@@ -546,54 +664,81 @@
     const c = deck[studyState.idx];
     const s = c?.study;
     const topicHref = t => href("study", t ? { topic: t } : {});
+    const CH = OCA.studyChoices;
+    const picks = studyState.picks;
+    const answered = QUESTIONS.filter(([k]) => picks[k]).length;
+    const done = studyState.revealed || answered === QUESTIONS.length;
+    const explain = { owes: s?.owes, bill: s?.billPatient, route: s?.route };
+    const sc = studyState.score;
+    const qHtml = !c ? "" : QUESTIONS.map(([k, label], qi) => {
+      const pick = picks[k], right = s.key[k], show = !!pick || studyState.revealed;
+      return `<fieldset class="mcq ${show ? (pick === right ? "ok" : pick ? "bad" : "shown") : ""}">
+        <legend><span class="qn">${qi + 1}</span>${label}</legend>
+        <div class="opts">${Object.entries(CH[k]).map(([v, text]) => {
+          const cls = !show ? "" : v === right ? "right" : v === pick ? "wrong" : "dim";
+          return `<button type="button" class="opt ${cls}" data-q="${k}" data-v="${v}" ${show ? "disabled" : ""}>${esc(text)}</button>`;
+        }).join("")}</div>
+        ${show ? `<p class="why">${pick === right ? "✓ Correct – " : pick ? "✗ Answer: " : "Answer: "}${esc(explain[k])}</p>` : ""}
+      </fieldset>`;
+    }).join("");
     app.innerHTML = `
       <section class="page study">
         <div class="study-top">
-          <div><h1>Study mode</h1><p class="lede">Read the remit line and the scenario, answer the four questions in your head, then reveal.</p></div>
-          <div class="study-progress"><b>${nKnown}</b>/<span>${studyState.order.length}</span> known
+          <div><h1>Study mode</h1><p class="lede">Read the remit line and scenario, then answer three questions. Get all three right and the card is marked known.</p></div>
+          <div class="study-progress">
+            <div class="sp-row"><span><b>${nKnown}</b>/${studyState.order.length} known</span><span>Score <b>${sc.right}</b>/${sc.total}${sc.streak > 1 ? ` · 🔥 ${sc.streak}` : ""}</span></div>
             <div class="bar"><i style="width:${studyState.order.length ? Math.round(100 * nKnown / studyState.order.length) : 0}%"></i></div></div>
         </div>
-        <div class="chips"><a class="chip ${!topic ? "on" : ""}" href="${topicHref("")}">All topics</a>${topics.map(t => `<a class="chip ${topic === t ? "on" : ""}" href="${topicHref(t)}">${esc(t)}</a>`).join("")}</div>
+        <div class="chips scroll-x"><a class="chip ${!topic ? "on" : ""}" href="${topicHref("")}">All topics</a>${topics.map(t => `<a class="chip ${topic === t ? "on" : ""}" href="${topicHref(t)}">${esc(t)}</a>`).join("")}</div>
         <div class="study-tools">
           <button class="btn small" id="stShuffle">Shuffle</button>
-          <label class="toggle inline"><input type="checkbox" id="stUnknown" ${studyState.unknownOnly ? "checked" : ""}> Only cards I haven't marked known</label>
-          <button class="btn ghost small" id="stReset">Reset progress</button>
-          <a class="btn ghost small" href="${href("search", { cat: "study" })}">See all as a list</a>
+          <label class="toggle inline"><input type="checkbox" id="stUnknown" ${studyState.unknownOnly ? "checked" : ""}> Unknown cards only</label>
+          <button class="btn ghost small" id="stReset">Reset</button>
+          <a class="btn ghost small" href="${href("search", { cat: "study" })}">List view</a>
         </div>
-        ${!c ? `<p class="empty">Nothing left in this deck – nice work. Untick “only cards I haven't marked known” or reset progress.</p>` : `
-        <article class="flash ${studyState.revealed ? "open" : ""}">
-          <div class="flash-meta"><span class="badge b-study">${esc(s.topic)}</span><span class="muted small">Card ${studyState.idx + 1} of ${deck.length}${known.has(c.id) ? " · marked known" : ""}</span></div>
+        ${!c ? `<p class="empty">Nothing left in this deck – nice work. Untick “Unknown cards only” or reset.</p>` : `
+        <article class="flash">
+          <div class="flash-meta"><span class="badge b-study">${esc(s.topic)}</span><span class="muted small">${studyState.idx + 1} / ${deck.length}${known.has(c.id) ? " · known ✓" : ""}</span></div>
           <div class="remit">${esc(s.remit)}</div>
           <h2>${esc(c.title)}</h2>
           <p class="scenario">${esc(s.scenario)}</p>
-          ${studyState.revealed ? `
-            <div class="answer">${c.body}</div>
-            <div class="flash-actions"><button class="btn primary" id="stKnew">I knew it →</button><button class="btn" id="stAgain">Review again →</button><a class="btn ghost" href="${itemHref(c)}">Open full card</a></div>` : `
-            <ol class="questions"><li>Who owes this amount?</li><li>Can you bill the patient?</li><li>Fix and resubmit, or appeal?</li><li>What are the next steps?</li></ol>
-            <div class="flash-actions"><button class="btn primary" id="stReveal">Reveal answer <kbd>Space</kbd></button><button class="btn ghost" id="stSkip">Skip →</button></div>`}
-        </article>`}
+          ${qHtml}
+          ${done ? `<div class="answer">
+            <h4>Next steps</h4><ol class="steps">${s.steps.map(x => `<li>${x}</li>`).join("")}</ol>
+            <h4>Why</h4><p>${s.why}</p>${s.payer ? `<h4>Payer notes</h4><p>${s.payer}</p>` : ""}
+            <p><a href="${itemHref(c)}">Open the full card and related codes →</a></p></div>` : ""}
+        </article>
+        <div class="study-bar">
+          ${done ? `<button class="btn primary" id="stNext">Next card →</button>` : `<button class="btn" id="stReveal">Show answers</button><button class="btn ghost" id="stSkip">Skip →</button>`}
+        </div>`}
       </section>`;
-    const next = () => { studyState.idx = (studyState.idx + 1) % Math.max(1, deck.length); studyState.revealed = false; viewStudy(q); };
-    $("#stShuffle").onclick = () => { studyState.order.sort(() => Math.random() - .5); studyState.idx = 0; studyState.revealed = false; viewStudy(q); };
-    $("#stUnknown").onchange = e => { studyState.unknownOnly = e.target.checked; studyState.idx = 0; studyState.revealed = false; viewStudy(q); };
-    $("#stReset").onclick = () => { saveKnown(new Set()); viewStudy(q); };
+    const next = () => { studyState.idx = (studyState.idx + 1) % Math.max(1, deck.length); studyState.revealed = false; studyState.picks = {}; viewStudy(q); window.scrollTo(0, 0); };
+    const resetCard = () => { studyState.revealed = false; studyState.picks = {}; };
+    $("#stShuffle").onclick = () => { studyState.order.sort(() => Math.random() - .5); studyState.idx = 0; resetCard(); viewStudy(q); };
+    $("#stUnknown").onchange = e => { studyState.unknownOnly = e.target.checked; studyState.idx = 0; resetCard(); viewStudy(q); };
+    $("#stReset").onclick = () => { saveKnown(new Set()); studyState.score = { right: 0, total: 0, streak: 0 }; resetCard(); viewStudy(q); };
     if (!c) return;
-    if (!studyState.revealed) {
-      $("#stReveal").onclick = () => { studyState.revealed = true; viewStudy(q); };
-      $("#stSkip").onclick = next;
-    } else {
-      $("#stKnew").onclick = () => { known.add(c.id); saveKnown(known); if (studyState.unknownOnly) { studyState.revealed = false; viewStudy(q); } else next(); };
-      $("#stAgain").onclick = () => { known.delete(c.id); saveKnown(known); next(); };
-    }
+    app.querySelectorAll(".opt:not([disabled])").forEach(b => b.onclick = () => {
+      picks[b.dataset.q] = b.dataset.v;
+      const ok = b.dataset.v === s.key[b.dataset.q];
+      sc.total++; if (ok) { sc.right++; sc.streak++; } else sc.streak = 0;
+      if (QUESTIONS.every(([k]) => picks[k])) {
+        const all = QUESTIONS.every(([k]) => picks[k] === s.key[k]);
+        if (all) known.add(c.id); else known.delete(c.id);
+        saveKnown(known);
+      }
+      const y = window.scrollY; viewStudy(q); window.scrollTo(0, y);
+    });
+    if (done) $("#stNext").onclick = () => { if (studyState.unknownOnly && known.has(c.id)) { resetCard(); viewStudy(q); window.scrollTo(0, 0); } else next(); };
+    else { $("#stReveal").onclick = () => { studyState.revealed = true; const y = window.scrollY; viewStudy(q); window.scrollTo(0, y); }; $("#stSkip").onclick = next; }
   }
   document.addEventListener("keydown", e => {
     if (!location.hash.startsWith("#/study") || /input|textarea|select/i.test(document.activeElement.tagName)) return;
-    if (e.key === " " && $("#stReveal")) { e.preventDefault(); $("#stReveal").click(); }
-    else if (e.key === "ArrowRight") { e.preventDefault(); ($("#stSkip") || $("#stAgain"))?.click(); }
+    if (e.key === "ArrowRight" || (e.key === "Enter" && $("#stNext"))) { e.preventDefault(); ($("#stNext") || $("#stSkip"))?.click(); }
   });
 
   function viewLookup() {
-    document.title = "Provider lookup – Oncology Claims Atlas";
+    document.title = "Provider lookup – Claims Atlas";
     const links = [
       ["NPPES NPI Registry", "https://npiregistry.cms.hhs.gov/", "Every individual and organization NPI in the US, with taxonomy, addresses and enumeration dates."],
       ["NPPES downloadable file", "https://download.cms.gov/nppes/NPI_Files.html", "The full monthly NPI dissemination file (several GB) for bulk analysis."],
@@ -618,7 +763,7 @@
   }
 
   function viewAbout() {
-    document.title = "About & sources – Oncology Claims Atlas";
+    document.title = "About & sources – Claims Atlas";
     const gen = ["provider", "icd10", "hcpcs", "modifier", "pos"].map(c => OCA.sources[c] && `<li><b>${esc(CATS[c].label)}</b> (${nf.format(counts[c])}): <a href="${esc(OCA.sources[c].url)}" target="_blank" rel="noopener">${esc(OCA.sources[c].name)}</a></li>`).join("");
     app.innerHTML = `
       <section class="page prose">
@@ -656,7 +801,7 @@
   // ---------- router ----------
   function route() {
     const { parts, q } = parseHash();
-    document.querySelectorAll(".topnav a").forEach(a => a.classList.toggle("on", a.dataset.nav === (parts[0] || "home") || (a.dataset.nav === "templates" && q.cat === "template") || (a.dataset.nav === "denials" && q.cat === "response")));
+    document.querySelectorAll(".topnav a, .bottomnav a").forEach(a => { const n = a.dataset.nav, special = q.cat === "template" ? "templates" : q.cat === "response" ? "denials" : null; a.classList.toggle("on", special ? n === special : n === (parts[0] || "home")); });
     if (!parts.length) return viewHome();
     if (parts[0] === "search") return viewSearch(q);
     if (parts[0] === "item") return viewItem(parts[1], parts.slice(2).join("/"));

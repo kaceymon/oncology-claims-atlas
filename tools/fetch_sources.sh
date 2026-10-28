@@ -20,4 +20,8 @@ mkdir -p hcpcs && unzip -o -q hcpcs.zip -d hcpcs
 # CMS Place of Service code set - public domain
 curl -fsSL -A "Mozilla/5.0" -o pos.html "https://www.cms.gov/medicare/coding-billing/place-of-service-codes/code-sets"
 
+# X12 CARC/RARC public listing pages - only codes, dates and derived topics are emitted (wording is (c) X12)
+curl -fsSL -A "Mozilla/5.0" -o carc.html "https://x12.org/codes/claim-adjustment-reason-codes"
+curl -fsSL -A "Mozilla/5.0" -o rarc.html "https://x12.org/codes/remittance-advice-remark-codes"
+
 echo "done -> $out"

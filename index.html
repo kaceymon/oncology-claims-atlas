@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Oncology Claims Atlas</title>
+  <title>Claims Atlas</title>
   <meta name="description" content="Search and filter US claim types, provider types, oncology ICD-10-CM and HCPCS codes, denial codes, appeal pathways and fill-in templates. Public information only.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%237a3fbf'/%3E%3Cpath d='M9 10h14M9 16h14M9 22h9' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
   <meta name="color-scheme" content="dark light">
@@ -17,7 +17,7 @@
 <body>
   <header class="topbar">
     <div class="wrap topbar-in">
-      <a class="brand" href="#/"><span class="logo" aria-hidden="true"></span>Oncology Claims Atlas</a>
+      <a class="brand" href="#/"><span class="logo" aria-hidden="true"></span>Claims Atlas</a>
       <nav class="topnav" aria-label="Main">
         <a href="#/search" data-nav="search">Search</a>
         <a href="#/search?cat=response" data-nav="denials">Denials</a>
@@ -35,6 +35,13 @@
     </div>
   </header>
   <main class="wrap" id="app"><p class="muted">Loading…</p></main>
+  <nav class="bottomnav" aria-label="Main (mobile)">
+    <a href="#/" data-nav="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Home</a>
+    <a href="#/search" data-nav="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</a>
+    <a href="#/study" data-nav="study"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l9-4 9 4-9 4z"/><path d="M7 10v5c0 1.5 2.5 3 5 3s5-1.5 5-3v-5"/></svg>Study</a>
+    <a href="#/search?cat=template" data-nav="templates"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7M9 8h3"/></svg>Templates</a>
+    <a href="#/search?cat=response" data-nav="denials"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 8l8 8"/></svg>Denials</a>
+  </nav>
   <footer class="wrap footer">
     <span>Public data: NUCC taxonomy 26.1 · ICD-10-CM FY2027 · CMS HCPCS Oct 2026 · CMS POS. Educational reference – not legal, coding or billing advice.</span>
     <a href="#/about">Sources & licenses</a>
@@ -54,6 +61,8 @@
   <script src="data/gen_hcpcs.js"></script>
   <script src="data/gen_modifiers.js"></script>
   <script src="data/gen_pos.js"></script>
+  <script src="data/gen_x12_carc.js"></script>
+  <script src="data/gen_x12_rarc.js"></script>
   <script src="assets/app.js"></script>
 </body>
 </html>
