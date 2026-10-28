@@ -432,20 +432,24 @@
 
   // ---------- template filler ----------
   function fieldsOf(t) { return [...new Set([...t.matchAll(/\{\{([^}]+)\}\}/g)].map(m => m[1]))]; }
+  // Patient identifiers never get an input box: they stay as [blanks] to fill in by hand outside the site.
+  const PATIENT_ID = /^(patient name|patient dob|member id|mbi|group or plan number|name)$/i;
   function templateTool(r) {
     const fields = fieldsOf(r.template);
     return `
       <div class="tpl">
         <div class="tpl-head"><h3>Fill in the template</h3>
           <div class="tpl-actions"><button class="btn primary small" id="tplCopy">Copy letter</button><button class="btn small" id="tplDownload">Download .txt</button><button class="btn small" id="tplPrint">Print</button><button class="btn ghost small" id="tplClear">Clear fields</button></div></div>
+        <p class="note subtle small">Patient details (name, date of birth, member ID) are left as <mark class="locked">[blanks]</mark> on purpose – this site never asks for them. Fill them in by hand after you print or paste the letter.</p>
         <div class="tpl-grid">
           <form class="tpl-form" id="tplForm">${fields.map((f, i) => {
+            if (PATIENT_ID.test(f)) return "";
             const long = f.length > 48 || /summary|rationale|history|reason|argument|point|evidence|criteria|criterion|details|enclosures/i.test(f);
             return `<label><span>${esc(f)}</span>${long ? `<textarea data-f="${i}" rows="2"></textarea>` : `<input data-f="${i}" type="text">`}</label>`;
           }).join("")}</form>
           <pre class="tpl-preview" id="tplPreview" aria-live="polite"></pre>
         </div>
-        <p class="muted small">Text stays in your browser (saved locally on this device only). Don't type real patient information on a shared computer.</p>
+        <p class="muted small">What you type stays in your browser (saved on this device only) so you can come back to a draft.</p>
       </div>`;
   }
   function wireTemplate(r) {
@@ -462,6 +466,7 @@
       const pre = $("#tplPreview");
       pre.innerHTML = esc(r.template).replace(/\{\{([^}]+)\}\}/g, (_, f) => {
         const name = f.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        if (PATIENT_ID.test(name)) return `<mark class="locked" title="Fill in by hand">[${f}]</mark>`;
         const v = vals[name];
         return v ? `<mark class="filled">${esc(v)}</mark>` : `<mark class="blank">[${f}]</mark>`;
       });
