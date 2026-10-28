@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oncology Claims Atlas</title>
+  <meta name="description" content="Search and filter US claim types, provider types, oncology ICD-10-CM and HCPCS codes, denial codes, appeal pathways and fill-in templates. Public information only.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%237a3fbf'/%3E%3Cpath d='M9 10h14M9 16h14M9 22h9' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0b0a10">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+  <script>try { if (localStorage.getItem("oca-theme") === "light") document.documentElement.dataset.theme = "light"; } catch (e) {}</script>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-in">
+      <a class="brand" href="#/"><span class="logo" aria-hidden="true"></span>Oncology Claims Atlas</a>
+      <nav class="topnav" aria-label="Main">
+        <a href="#/search" data-nav="search">Search</a>
+        <a href="#/search?cat=response" data-nav="denials">Denials</a>
+        <a href="#/search?cat=template" data-nav="templates">Templates</a>
+        <a href="#/study" data-nav="study">Study</a>
+        <a href="#/lookup" data-nav="lookup">Provider lookup</a>
+        <a href="#/about" data-nav="about">About</a>
+      </nav>
+      <div class="top-actions">
+        <form class="header-search" id="headerSearch" role="search">
+          <input id="headerQ" type="search" placeholder="Search  ( / )" aria-label="Search everything" autocomplete="off">
+        </form>
+        <button class="btn ghost theme-btn" id="themeBtn" type="button" aria-label="Switch to light mode" title="Switch theme">☀</button>
+      </div>
+    </div>
+  </header>
+  <main class="wrap" id="app"><p class="muted">Loading…</p></main>
+  <footer class="wrap footer">
+    <span>Public data: NUCC taxonomy 26.1 · ICD-10-CM FY2027 · CMS HCPCS Oct 2026 · CMS POS. Educational reference – not legal, coding or billing advice.</span>
+    <a href="#/about">Sources & licenses</a>
+  </footer>
+  <noscript><p class="wrap">This site needs JavaScript to search.</p></noscript>
+
+  <script src="data/oca.js"></script>
+  <script src="data/cur_claims.js"></script>
+  <script src="data/cur_denials.js"></script>
+  <script src="data/cur_topics.js"></script>
+  <script src="data/cur_templates.js"></script>
+  <script src="data/cur_study.js"></script>
+  <script src="data/cur_hipaa.js"></script>
+  <script src="data/cur_cpt.js"></script>
+  <script src="data/gen_providers.js"></script>
+  <script src="data/gen_icd10.js"></script>
+  <script src="data/gen_hcpcs.js"></script>
+  <script src="data/gen_modifiers.js"></script>
+  <script src="data/gen_pos.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>
