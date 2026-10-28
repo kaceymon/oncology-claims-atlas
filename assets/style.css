@@ -220,6 +220,9 @@ textarea { resize: vertical; }
 mark.blank { background: var(--mark-blank); color: inherit; border-radius: 4px; padding: 0 2px; }
 mark.filled { background: var(--mark-filled); color: inherit; border-radius: 4px; padding: 0 2px; }
 mark.locked { background: transparent; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 4px; padding: 0 3px; }
+.tpl-legend { display: flex; flex-direction: column; gap: 4px; font-size: .84rem; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; margin-bottom: 12px; }
+.tpl-legend mark.filled { background: var(--mark-blank); }
+.tpl-warn { background: var(--warn-bg); color: var(--warn); border-radius: 10px; padding: 8px 12px; font-size: .86rem; margin: 0 0 12px; }
 
 /* lookup / about */
 .page { padding: 34px 0 48px; max-width: 920px; display: flex; flex-direction: column; gap: 16px; }

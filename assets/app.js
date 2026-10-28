@@ -666,15 +666,26 @@
   // older versions saved template drafts in the browser – remove them
   try { Object.keys(localStorage).filter(k => k.startsWith("oca-tpl-")).forEach(k => localStorage.removeItem(k)); } catch { /* storage unavailable */ }
   function fieldsOf(t) { return [...new Set([...t.matchAll(/\{\{([^}]+)\}\}/g)].map(m => m[1]))]; }
-  // Anything about a specific patient never gets an input box: identity, ID/claim/reference numbers,
-  // the patient's dates and clinical facts stay as [blanks] to fill in by hand outside the site.
-  const SENSITIVE = [
-    /patient name|patient dob|member id|^mbi$|group or plan number|^name$|^phone$|representative|subscriber|enrollee/i,
-    /claim number|claim or authorization|^icn$|reference|original claim|^ptan$/i,
-    /date\(s\) of service|date of diagnosis|planned start|denial date|notice date|request date|original submission|^start date$|^end date|^dates$|service and dates/i,
-    /diagnosis in words|icd-10-cm code|^stage$|histology|biomarker results|ecog|prior therapies|clinical summary|evidence in chart|^details$/i,
+  // Allow-list: only fields about the practice, payer, physician, drug/code, policy and published
+  // evidence get an input box. Everything else - the patient, their claim and their case, including the
+  // clinical argument - stays a [blank] to write by hand outside the site, so there is nowhere to type it.
+  const SAFE_FIELDS = [
+    /^practice |^practice or facility name$|^facility name$|^servicing facility name$|^billing contact name$|^date$|^date and time$|^due date$|^owner$/i,
+    /^payer (name|department|address|phone|preferred site)|^member services phone$|^rep name$|^mac name$|^mac appeals address/i,
+    /^physician (name|npi|direct phone)|^specialty$|^contact for questions|^(billing|facility) npi$|^tax id$|^pos code$|^npi$|^out-of-network provider/i,
+    /^drug( name| \/ regimen| \/ procedure| \/ service and codes| \/ regimen or service)?$|^requested drug$|^preferred drug|^hcpcs|^code\(s\)$|^codes and description|^service \/ trial/i,
+    /^policy name|guideline|^nccn|^e\.g\. nccn|^compendium name$|^listing \/ recommendation|^fda|^key trial|^citations$|^phase iii|^adoption at|^ncd \/ lcd|^quote the plan|^trial title$|^nct number$|^phase$|^sponsor$/i,
+    /^standard \/ expedited$|^urgency \(|^pre-service \(|^filing limit|^state insurance department|^state step therapy|^site of care \(|^enclosures|^other enclosures$/i,
+    /^for medicare: |^for state-regulated|^commercial non-grandfathered|^medicare: ncd|^medicaid: social security|^if expedited|^if applicable|^provided by the sponsor/i,
   ];
-  const PATIENT_ID = { test: f => SENSITIVE.some(rx => rx.test(f)) };
+  const PATIENT_ID = { test: f => !SAFE_FIELDS.some(rx => rx.test(f.trim())) };
+  // typed text that looks like patient identifiers is refused even in an allowed field
+  const LOOKS_PERSONAL = [
+    [/\b\d{3}-\d{2}-\d{4}\b/, "a Social Security number"],
+    [/\b[1-9][AC-HJKMNP-RT-Y][AC-HJKMNP-RT-Y0-9]\d[AC-HJKMNP-RT-Y][AC-HJKMNP-RT-Y0-9]\d[AC-HJKMNP-RT-Y]{2}\d{2}\b/i, "a Medicare number (MBI)"],
+    [/\b(0?[1-9]|1[0-2])[\/-](0?[1-9]|[12]\d|3[01])[\/-](19|20)?\d\d\b/, "a date (dates of birth and service aren't allowed)"],
+  ];
+  const DATE_FIELDS = /^(date|date and time|due date)$/i;
   function templateTool(r) {
     const fields = fieldsOf(r.template);
     return `
@@ -682,12 +693,18 @@
         <div class="tpl-tabs" role="tablist"><button type="button" role="tab" data-tab="fill">Fill in <span id="tplCount"></span></button><button type="button" role="tab" data-tab="preview">Preview letter</button></div>
         <div class="tpl-head"><h3>Fill in the template</h3>
           <div class="tpl-actions"><button class="btn primary small" id="tplCopy">Copy letter</button><button class="btn small" id="tplDownload">Download .txt</button><button class="btn small" id="tplPrint">Print</button><button class="btn ghost small" id="tplClear">Clear fields</button></div></div>
-        <p class="note subtle small">Anything about a specific patient – name, date of birth, member/claim/authorization numbers, dates of service, diagnosis and clinical details – is left as a <mark class="locked">[blank]</mark> on purpose. This site never asks for it. Fill those in by hand after you print or paste the letter.</p>
+        <div class="tpl-legend">
+          <span><mark class="filled">highlighted</mark> = fill in here: practice, payer, physician, drug and codes, policy and published evidence</span>
+          <span><mark class="locked">[dashed]</mark> = anything about the patient or their case – write it by hand after you print or paste. This site has nowhere to type patient information.</span>
+        </div>
+        <p class="tpl-warn" id="tplWarn" role="alert" hidden></p>
         <div class="tpl-grid">
           <form class="tpl-form" id="tplForm">${fields.map((f, i) => {
             if (PATIENT_ID.test(f)) return "";
-            const long = f.length > 48 || /summary|rationale|history|reason|argument|point|evidence|criteria|criterion|details|enclosures/i.test(f);
-            return `<label><span>${esc(f)}</span>${long ? `<textarea data-f="${i}" rows="2" placeholder="No names, dates or ID numbers"></textarea>` : `<input data-f="${i}" type="text" autocomplete="off">`}</label>`;
+            // judge the field by its name, not the example text in brackets after it
+            const name = f.replace(/\s*\(.*\)\s*$/, "");
+            const long = name.length > 48 || /enclosures|citation|guideline|trial|quote|^for |^if |^commercial|^medica/i.test(name);
+            return `<label><span>${esc(f)}</span>${long ? `<textarea data-f="${i}" rows="2" autocomplete="off"></textarea>` : `<input data-f="${i}" type="text" autocomplete="off">`}</label>`;
           }).join("")}</form>
           <pre class="tpl-preview" id="tplPreview" aria-live="polite"></pre>
         </div>
@@ -697,6 +714,17 @@
   function wireTemplate(r) {
     const fields = fieldsOf(r.template);
     const inputs = [...document.querySelectorAll("#tplForm [data-f]")];
+    // refuse anything that looks like a patient identifier
+    $("#tplForm").addEventListener("input", e => {
+      const el = e.target, field = fields[+el.dataset.f] || "";
+      const hit = LOOKS_PERSONAL.find(([rx], k) => !(k === 2 && DATE_FIELDS.test(field)) && rx.test(el.value));
+      const warn = $("#tplWarn");
+      if (hit) {
+        el.value = el.value.replace(hit[0], "");
+        warn.textContent = `Removed what looked like ${hit[1]}. Patient information can't be entered here – add it by hand after printing.`;
+        warn.hidden = false;
+      } else warn.hidden = true;
+    }, true);
     const render = () => {
       const vals = {};
       inputs.forEach(el => { vals[fields[+el.dataset.f]] = el.value; });
