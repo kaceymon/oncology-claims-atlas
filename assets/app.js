@@ -663,9 +663,18 @@
   function copyBtn(text) { return `<button class="btn ghost small" data-copy="${esc(text)}" title="Copy">Copy</button>`; }
 
   // ---------- template filler ----------
+  // older versions saved template drafts in the browser – remove them
+  try { Object.keys(localStorage).filter(k => k.startsWith("oca-tpl-")).forEach(k => localStorage.removeItem(k)); } catch { /* storage unavailable */ }
   function fieldsOf(t) { return [...new Set([...t.matchAll(/\{\{([^}]+)\}\}/g)].map(m => m[1]))]; }
-  // Patient identifiers never get an input box: they stay as [blanks] to fill in by hand outside the site.
-  const PATIENT_ID = /^(patient name|patient dob|member id|mbi|group or plan number|name)$/i;
+  // Anything about a specific patient never gets an input box: identity, ID/claim/reference numbers,
+  // the patient's dates and clinical facts stay as [blanks] to fill in by hand outside the site.
+  const SENSITIVE = [
+    /patient name|patient dob|member id|^mbi$|group or plan number|^name$|^phone$|representative|subscriber|enrollee/i,
+    /claim number|claim or authorization|^icn$|reference|original claim|^ptan$/i,
+    /date\(s\) of service|date of diagnosis|planned start|denial date|notice date|request date|original submission|^start date$|^end date|^dates$|service and dates/i,
+    /diagnosis in words|icd-10-cm code|^stage$|histology|biomarker results|ecog|prior therapies|clinical summary|evidence in chart|^details$/i,
+  ];
+  const PATIENT_ID = { test: f => SENSITIVE.some(rx => rx.test(f)) };
   function templateTool(r) {
     const fields = fieldsOf(r.template);
     return `
@@ -673,29 +682,24 @@
         <div class="tpl-tabs" role="tablist"><button type="button" role="tab" data-tab="fill">Fill in <span id="tplCount"></span></button><button type="button" role="tab" data-tab="preview">Preview letter</button></div>
         <div class="tpl-head"><h3>Fill in the template</h3>
           <div class="tpl-actions"><button class="btn primary small" id="tplCopy">Copy letter</button><button class="btn small" id="tplDownload">Download .txt</button><button class="btn small" id="tplPrint">Print</button><button class="btn ghost small" id="tplClear">Clear fields</button></div></div>
-        <p class="note subtle small">Patient details (name, date of birth, member ID) are left as <mark class="locked">[blanks]</mark> on purpose – this site never asks for them. Fill them in by hand after you print or paste the letter.</p>
+        <p class="note subtle small">Anything about a specific patient – name, date of birth, member/claim/authorization numbers, dates of service, diagnosis and clinical details – is left as a <mark class="locked">[blank]</mark> on purpose. This site never asks for it. Fill those in by hand after you print or paste the letter.</p>
         <div class="tpl-grid">
           <form class="tpl-form" id="tplForm">${fields.map((f, i) => {
             if (PATIENT_ID.test(f)) return "";
             const long = f.length > 48 || /summary|rationale|history|reason|argument|point|evidence|criteria|criterion|details|enclosures/i.test(f);
-            return `<label><span>${esc(f)}</span>${long ? `<textarea data-f="${i}" rows="2"></textarea>` : `<input data-f="${i}" type="text">`}</label>`;
+            return `<label><span>${esc(f)}</span>${long ? `<textarea data-f="${i}" rows="2" placeholder="No names, dates or ID numbers"></textarea>` : `<input data-f="${i}" type="text" autocomplete="off">`}</label>`;
           }).join("")}</form>
           <pre class="tpl-preview" id="tplPreview" aria-live="polite"></pre>
         </div>
-        <p class="muted small">What you type stays in your browser (saved on this device only) so you can come back to a draft.</p>
+        <p class="muted small">Nothing you type is saved or sent anywhere – it disappears when you leave the page. Copy, download or print before you go.</p>
       </div>`;
   }
   function wireTemplate(r) {
     const fields = fieldsOf(r.template);
-    const key = "oca-tpl-" + r.code;
-    let saved = {};
-    try { saved = JSON.parse(localStorage.getItem(key) || "{}"); } catch { saved = {}; }
     const inputs = [...document.querySelectorAll("#tplForm [data-f]")];
-    inputs.forEach(el => { el.value = saved[fields[+el.dataset.f]] || ""; });
     const render = () => {
       const vals = {};
       inputs.forEach(el => { vals[fields[+el.dataset.f]] = el.value; });
-      try { localStorage.setItem(key, JSON.stringify(vals)); } catch { /* storage unavailable */ }
       $("#tplCount").textContent = `${inputs.filter(el => el.value.trim()).length}/${inputs.length}`;
       const pre = $("#tplPreview");
       pre.innerHTML = esc(r.template).replace(/\{\{([^}]+)\}\}/g, (_, f) => {
@@ -899,7 +903,7 @@
           <li><b>NCCI</b> pair files (CMS distributes them under an AMA CPT license) – the either/or rules here are written from CPT conventions and NCCI policy; check NCCI for any other pair.</li>
           <li><b>NUBC</b> UB-04 code values (type of bill, revenue, condition codes) – paraphrased from CMS manuals and linked.</li>
           <li><b>NCCN</b> guidelines and commercial compendia – cited by name only.</li>
-          <li>No patient data. Template text you type stays in your browser's local storage.</li>
+          <li>No patient data. Templates never ask for patient identifiers, claim numbers, dates or clinical details, and nothing typed into a template is saved or sent anywhere.</li>
         </ul>
         <h2>Versions</h2>
         <p>NUCC taxonomy v26.1 · ICD-10-CM FY2027 (Oct 1 2026 – Sep 30 2027) · HCPCS Level II October 2026 · CMS Place of Service code set. Rebuild with <code>tools/fetch_sources.sh</code> and <code>tools/build_data.py</code>.</p>
